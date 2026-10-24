@@ -1,0 +1,10 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+exclude = ["scripts"]
+
+[tool.ruff.lint]
+# Bộ rule tối thiểu cho CI: lỗi cú pháp/logic rõ ràng (Pyflakes) + import
+# order (isort). Cố tình không bật các rule về style/format để không chặn
+# CI vì lý do thẩm mỹ trong giai đoạn dự án còn thay đổi nhiều.
+select = ["E9", "F", "I"]

@@ -1,0 +1,243 @@
+name: CD — Build, Push & Deploy
+
+# Luồng: build (test qua) -> push image lên GHCR -> deploy-staging (tự động)
+# -> deploy-production (CHỜ DUYỆT thủ công qua "environment: production").
+#
+# Yêu cầu cấu hình 1 lần trên GitHub repo (Settings > Environments):
+#   - Environment "staging": không cần reviewer.
+#   - Environment "production": bật "Required reviewers" — đây chính là
+#     approval gate mà bạn nhắc tới, GitHub sẽ tự dừng job lại chờ người
+#     thật bấm "Approve" trước khi chạy tiếp.
+# Secrets cần có (Settings > Secrets and variables > Actions):
+#   STAGING_HOST, STAGING_USER, STAGING_SSH_KEY
+#   PROD_HOST, PROD_USER, PROD_SSH_KEY
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"] # tag kiểu v1.0.0 để tạo release image
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BACKEND: ${{ github.repository }}/backend
+  IMAGE_FRONTEND: ${{ github.repository }}/frontend
+
+jobs:
+  # Chạy lại CI như một cổng chặn — không cho build/push image nếu test fail.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract tags/labels — backend
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BACKEND }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend-ai
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache layer giữa các lần chạy CI qua GitHub Actions cache — build
+          # sau nhanh hơn hẳn vì không phải tải lại base image/pip mỗi lần.
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Extract tags/labels — frontend
+        id: meta_frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_FRONTEND }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ steps.meta_frontend.outputs.tags }}
+          labels: ${{ steps.meta_frontend.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    steps:
+      - name: Checkout (lấy scripts/smoke_test.sh)
+        uses: actions/checkout@v4
+
+      - name: SSH deploy to staging
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            export IMAGE_TAG=${{ github.sha }}
+            docker compose pull
+            docker compose up -d
+            docker image prune -f
+
+      - name: Chờ container healthy rồi mới coi là deploy xong
+        # docker-compose.yml đã khai báo healthcheck cho backend-ai/frontend —
+        # bước này chờ Docker tự báo "healthy" thay vì đoán mò bằng sleep cố
+        # định. Nếu quá 2 phút mà chưa healthy, coi như deploy thất bại.
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            for i in $(seq 1 24); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' asa_backend 2>/dev/null || echo "starting")
+              if [ "$status" = "healthy" ]; then
+                echo "backend healthy"; exit 0
+              fi
+              echo "Chờ backend healthy (lần $i/24): $status"
+              sleep 5
+            done
+            echo "TIMEOUT: backend không healthy sau 2 phút"; exit 1
+
+      - name: Smoke test staging
+        env:
+          BASE_URL: https://staging.myapp.com
+        run: bash scripts/smoke_test.sh
+
+      - name: Rollback nếu smoke test fail
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            echo "Smoke test fail -> rollback về image 'previous'"
+            export IMAGE_TAG=previous
+            docker compose up -d
+            echo "Đã rollback staging về bản trước đó"
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment:
+      # "environment: production" với Required reviewers bật trong repo
+      # settings CHÍNH LÀ approval gate: job này sẽ tự dừng, hiện nút
+      # "Review deployments" cho reviewer được chỉ định, và chỉ chạy tiếp
+      # sau khi có người bấm Approve.
+      name: production
+      url: https://myapp.com
+    steps:
+      - name: Checkout (lấy scripts/smoke_test.sh)
+        uses: actions/checkout@v4
+
+      - name: Gắn thẻ image đang chạy là "previous" trước khi deploy bản mới
+        # Đây là cơ chế rollback đơn giản nhất với docker compose (không có
+        # replica/load balancer): luôn giữ 1 bản build trước đó gắn tag
+        # "previous" để có thể quay lại ngay nếu bản mới lỗi.
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            docker tag ghcr.io/${{ env.IMAGE_BACKEND }}:latest ghcr.io/${{ env.IMAGE_BACKEND }}:previous || true
+            docker tag ghcr.io/${{ env.IMAGE_FRONTEND }}:latest ghcr.io/${{ env.IMAGE_FRONTEND }}:previous || true
+
+      - name: SSH deploy to production
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            export IMAGE_TAG=${{ github.sha }}
+            docker compose pull
+            docker compose up -d
+            docker image prune -f
+
+      - name: Chờ container healthy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            for i in $(seq 1 24); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' asa_backend 2>/dev/null || echo "starting")
+              if [ "$status" = "healthy" ]; then
+                echo "backend healthy"; exit 0
+              fi
+              echo "Chờ backend healthy (lần $i/24): $status"
+              sleep 5
+            done
+            echo "TIMEOUT: backend không healthy sau 2 phút"; exit 1
+
+      - name: Smoke test production
+        env:
+          BASE_URL: https://myapp.com
+        run: bash scripts/smoke_test.sh
+
+      - name: Rollback về bản trước nếu smoke test fail
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/myapp
+            echo "Smoke test fail -> rollback production về image 'previous'"
+            export IMAGE_TAG=previous
+            docker compose up -d
+            echo "Đã rollback production về bản trước đó — cần kiểm tra thủ công nguyên nhân"

@@ -1,0 +1,2 @@
+{"question": "Hệ điều hành là gì?", "ground_truth": "Hệ điều hành là phần mềm quản lý tài nguyên phần cứng và cung cấp dịch vụ cho chương trình ứng dụng.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"question": "What does the scheduler do?", "ground_truth": "The scheduler selects which process runs next on the CPU.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}

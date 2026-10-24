@@ -1,0 +1,29 @@
+# Env / secrets
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Data / volumes
+*.log
+media/
+uploads/
+data/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# RAGAS reports
+eval_results/

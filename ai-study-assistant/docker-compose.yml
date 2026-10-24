@@ -1,0 +1,128 @@
+# AI Study Assistant — dev stack
+# Services: FastAPI backend, ReactJS frontend, PostgreSQL, Qdrant, MinIO, Redis, Celery worker
+services:
+  postgres:
+    image: postgres:16
+    container_name: asa_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-asa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-asa_password}
+      POSTGRES_DB: ${POSTGRES_DB:-asa_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./backend-ai/scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-asa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: asa_qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=128
+
+  minio:
+    image: dhi.io/minio:latest
+    container_name: asa_minio
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: asa_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend-ai:
+    build: ./backend-ai
+    container_name: asa_backend
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend-ai:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  celery-worker:
+    build: ./backend-ai
+    container_name: asa_worker
+    command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=1
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend-ai:
+        condition: service_healthy
+    volumes:
+      - ./backend-ai:/app
+
+  frontend:
+    build: ./frontend
+    container_name: asa_frontend
+    env_file: ./frontend/.env.local
+    depends_on:
+      backend-ai:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/5173'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  pg_data:
+  qdrant_data:
+  frontend_node_modules:
+  minio_data:

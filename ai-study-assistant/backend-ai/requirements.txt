@@ -1,0 +1,51 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+sqlalchemy==2.0.35
+asyncpg==0.29.0
+# Celery worker chạy đồng bộ, cần driver Postgres đồng bộ riêng (asyncpg chỉ
+# hoạt động với SQLAlchemy AsyncEngine) — thiếu gói này khiến worker crash
+# ngay khi xử lý tác vụ đầu tiên (_get_sync_engine trong app/worker/tasks.py).
+psycopg2-binary==2.9.9
+qdrant-client==1.11.2
+minio==7.2.9
+redis==5.0.8
+celery==5.4.0
+python-multipart==0.0.9
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+# passlib 1.7.4 gọi một API nội bộ của bcrypt (__about__.__version__) đã bị
+# gỡ bỏ từ bcrypt>=4.1, khiến CryptContext(schemes=["bcrypt"]) ném lỗi ngay
+# lần hash đầu tiên. Ghim bcrypt về bản cuối cùng còn tương thích với passlib 1.7.4.
+bcrypt==4.0.1
+email-validator==2.2.0
+httpx==0.27.2
+PyMuPDF==1.23.8
+python-docx==1.1.0
+python-pptx==0.6.23
+# OCR cơ bản cho hình ảnh tĩnh có chữ (đúng scope gốc trong tài liệu kế
+# hoạch dự án) — dùng khi trang PDF/ảnh trong DOCX-PPTX không có text chọn
+# được (ảnh scan, công thức/sơ đồ chụp màn hình). Cần cài thêm binary
+# tesseract-ocr ở tầng hệ điều hành (xem Dockerfile), pip install thôi
+# không đủ.
+pytesseract==0.3.13
+Pillow==10.4.0
+langchain-text-splitters==0.3.0
+tiktoken==0.7.0
+# AI / RAG / RL core
+torch==2.4.0
+transformers==4.45.1
+sentence-transformers==3.1.1
+vllm==0.6.2
+outlines==0.0.46
+pyairports==0.0.1
+numpy==1.26.4
+pyarrow==21.0.0
+
+requests==2.31.0
+
+# RAGAS — tự động tính metrics RAG (app/rag/evaluation.py). Chỉ dùng khi chạy
+# `python -m app.rag.evaluation`, không nằm trong luồng API.
+ragas==0.2.15
+langchain-openai==0.3.19
