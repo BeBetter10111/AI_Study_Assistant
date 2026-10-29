@@ -125,7 +125,6 @@ def _is_markdown(file_path: str, mime_type: str) -> bool:
 
 def _extract_md_sections(file_path: str) -> List[Dict[str, Any]]:
     """Return section dicts (same shape as DOCX), split on ``#`` headings.
-
     Lines inside fenced code blocks are never treated as headings.
     """
     with open(file_path, "r", encoding="utf-8-sig", errors="replace") as fh:
@@ -235,7 +234,6 @@ def _make_summary_chunk(
 # Public API
 def extract_and_chunk(file_path: str, mime_type: str) -> List[ChunkData]:
     """Extract text from a document and return structured ChunkData objects.
-
     This is the preferred entry point for the ingestion worker.  It returns
     metadata-rich chunks AND optional per-segment summary chunks appended at
     the end.

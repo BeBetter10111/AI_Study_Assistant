@@ -69,14 +69,13 @@ class LLMEngineManager:
                 model=self.model_name,
                 tensor_parallel_size=self.tensor_parallel_size,
                 gpu_memory_utilization=self.gpu_memory_utilization,
-                max_model_len=4096,  # Giới hạn context window cho RAG
+                max_model_len=4096,  # Limit context window for RAG
                 trust_remote_code=True
             )
             self._sampling_params_cls = SamplingParams
 
-            # Đóng gói vLLM với Outlines để ép kiểu dữ liệu Structured Output
             self.outlines_model = models.vllm(self.llm)
-            logger.info("Đã khởi tạo vLLM Engine thành công!")
+            logger.info("Initialized vLLM Engine successfully.")
 
         except Exception as e:
             logger.error(f"Error initializing vLLM Engine: {str(e)}")
@@ -113,7 +112,7 @@ class LLMEngineManager:
         return response.json()["message"]["content"]
 
     def stream_rag_response(self, prompt, system_prompt, temperature=0.2, max_tokens=512):
-        """Yield {"token": str} liên tục, kết thúc bằng {"done": True, ...thống kê}."""
+        """Yield {"token": str} continuously, ending with {"done": True, ...statistics}."""
         if self.backend != "ollama":
             yield {"token": self.generate_rag_response(prompt, system_prompt, temperature, max_tokens)}
             yield {"done": True}

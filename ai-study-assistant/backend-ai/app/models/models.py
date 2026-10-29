@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -10,13 +10,37 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, index=True, nullable=False)
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username        = Column(String(150), unique=True, index=True, nullable=False)
+    full_name       = Column(String(255), nullable=True)
+    email           = Column(String(255), unique=True, index=True, nullable=False)
+    phone           = Column(String(30),  unique=True, index=True, nullable=True)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    role            = Column(String(50),  nullable=False, default="Staff")
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
     documents = relationship("Document", back_populates="owner")
     quiz_attempts = relationship("QuizAttempt", back_populates="user")
+
+
+class UserRLState(Base):
+    """Trạng thái RL bền vững theo user — thay thế dict in-memory.
+
+    Mỗi user có đúng một row, được upsert sau mỗi lần submit quiz.
+    Đây là ground truth; Redis là cache nhanh phía trên.
+    """
+
+    __tablename__ = "user_rl_states"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True, nullable=False)
+    difficulty_index = Column(Integer, default=0, nullable=False)
+    # Lịch sử reward (float list) lưu dưới dạng JSON text
+    reward_history_json = Column(Text, default="[]", nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 class Document(Base):

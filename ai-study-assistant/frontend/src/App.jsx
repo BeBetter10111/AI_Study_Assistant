@@ -1,7 +1,5 @@
 import { useState, useEffect } from "react";
 import {
-  registerUser,
-  loginUser,
   setAuthToken,
   uploadDocument,
   getDocumentStatus,
@@ -9,6 +7,8 @@ import {
 import ChatWindow from "./features/chatbot/ChatWindow";
 import QuizPlayer from "./features/quiz/QuizPlayer";
 import FlashcardDeck from "./features/flashcard/FlashcardDeck";
+import LoginPage from "./features/auth/LoginPage";
+import SignupPage from "./features/auth/SignupPage";
 
 const UPLOAD_CONCURRENCY = 3;
 const ALLOWED_EXT = /\.(pdf|docx|pptx|md)$/i;
@@ -20,62 +20,12 @@ const TABS = [
   { key: "flashcard", label: "Thẻ ghi nhớ" },
 ];
 
-function LoginPanel({ onAuthenticated }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const handleAuth = async (action) => {
-    if (!email.trim() || !password.trim() || isLoading) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response =
-        action === "register"
-          ? await registerUser(email.trim(), password)
-          : await loginUser(email.trim(), password);
-      const { access_token: token } = response.data;
-      setAuthToken(token);
-      onAuthenticated(email.trim(), token);
-    } catch (err) {
-      setError(err.response?.data?.detail || "Log in/Sign up failed.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div style={styles.loginBox}>
-      <h2 style={{ marginTop: 0 }}>Log in / Sign up</h2>
-      <input
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <input
-        style={styles.input}
-        placeholder="Password (min 8 characters)"
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-      <div style={{ display: "flex", gap: "8px" }}>
-        <button style={styles.primaryButton} onClick={() => handleAuth("login")} disabled={isLoading}>
-          Log in
-        </button>
-        <button style={styles.secondaryButton} onClick={() => handleAuth("register")} disabled={isLoading}>
-          Sign up
-        </button>
-      </div>
-      {error && <p style={styles.error}>{error}</p>}
-    </div>
-  );
-}
+// "login" | "signup"
+const AUTH_SCREEN = { LOGIN: "login", SIGNUP: "signup" };
 
 export default function App() {
   const [userEmail, setUserEmail] = useState(null);
+  const [authScreen, setAuthScreen] = useState(AUTH_SCREEN.LOGIN);
   const [activeTab, setActiveTab] = useState("chat");
   const [documentId, setDocumentId] = useState(null); // null = search all documents
   const [uploads, setUploads] = useState([]); // [{key, name, id, status, error}]
@@ -87,6 +37,7 @@ export default function App() {
     setUserEmail(null);
     setDocumentId(null);
     setUploads([]);
+    setAuthScreen(AUTH_SCREEN.LOGIN);
   };
 
   const updateUpload = (key, patch) =>
@@ -149,10 +100,19 @@ export default function App() {
   const embeddedCount = uploads.filter((u) => u.status === "embedded").length;
 
   if (!userEmail) {
+    if (authScreen === AUTH_SCREEN.SIGNUP) {
+      return (
+        <SignupPage
+          onAuthenticated={handleAuthenticated}
+          onGoLogin={() => setAuthScreen(AUTH_SCREEN.LOGIN)}
+        />
+      );
+    }
     return (
-      <div style={styles.page}>
-        <LoginPanel onAuthenticated={handleAuthenticated} />
-      </div>
+      <LoginPage
+        onAuthenticated={handleAuthenticated}
+        onGoSignup={() => setAuthScreen(AUTH_SCREEN.SIGNUP)}
+      />
     );
   }
 

@@ -27,6 +27,9 @@ IDENTITY_KEYWORDS = (
     "what are your boundaries", "what are your rules", "what are your guidelines",
     "what are your policies", "what are your procedures", "what are your protocols",
     "what are your standards", "what are your requirements", "what are your expectations", 
+    "who r u", "what r u", "ur name", "ur capabilities", "ur functions", "ur features",
+    "ur skills", "ur abilities", "ur strengths", "ur weaknesses", "ur limitations", "ur restrictions", "ur constraints", "ur boundaries", "ur rules",
+    "ur guidelines", "ur policies", "ur procedures", "ur protocols", "ur standards", "ur requirements", "ur expectations"
 )
 EXPLAIN_INTENT_KEYWORDS = (
     "explain", "giải thích", "please explain", "can you explain",

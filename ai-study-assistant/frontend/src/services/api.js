@@ -12,11 +12,11 @@ export const setAuthToken = (token) => {
   }
 };
 
-export const registerUser = (email, password) =>
-  api.post("/auth/register", { email, password });
+export const registerUser = (data) =>
+  api.post("/auth/register", data);
 
-export const loginUser = (email, password) =>
-  api.post("/auth/login", { email, password });
+export const loginUser = (identifier, password) =>
+  api.post("/auth/login", { identifier, password });
 
 export const uploadDocument = (file) => {
   const form = new FormData();
