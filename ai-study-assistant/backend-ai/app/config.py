@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
 
+    # Password reset (forgot-password flow)
+    password_reset_expire_minutes: int = 15       # lifetime of the emailed code
+    password_reset_session_minutes: int = 10      # lifetime of the reset session after the code is verified
+    password_reset_resend_cooldown_s: int = 60    # min gap between two code requests for one account
+    password_reset_max_attempts: int = 5          # wrong-code attempts before the code is burned
+
+    # SMTP (leave SMTP_HOST empty in dev: the code is written to the backend log instead)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""            # e.g. "AI Study Assistant <no-reply@example.com>"
+    smtp_use_starttls: bool = True  # port 587
+    smtp_use_ssl: bool = False      # port 465 (implicit TLS)
+
     # RAG retrieval tuning
     # Candidates fetched PER LEG (dense and BM25) before fusion.
     rag_fetch_k: int = 20

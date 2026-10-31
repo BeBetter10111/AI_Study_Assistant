@@ -1,5 +1,6 @@
 """Dependency Injection: DB session, Current User."""
 import uuid
+from datetime import timezone
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -35,6 +36,9 @@ async def get_current_user(
         raw_user_id = payload.get("sub")
         if raw_user_id is None:
             raise credentials_exception
+        # Token của luồng reset password (có claim "purpose") không được dùng như access token.
+        if payload.get("purpose") is not None:
+            raise credentials_exception
     except JWTError as exc:
         raise credentials_exception from exc
 
@@ -51,5 +55,14 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_exception
+
+    # Sau khi đổi mật khẩu, mọi JWT cấp trước thời điểm đó đều mất hiệu lực.
+    if user.password_changed_at is not None:
+        changed_at = user.password_changed_at
+        if changed_at.tzinfo is None:
+            changed_at = changed_at.replace(tzinfo=timezone.utc)
+        issued_at = payload.get("iat")
+        if not isinstance(issued_at, (int, float)) or issued_at < changed_at.timestamp():
+            raise credentials_exception
 
     return user

@@ -1,8 +1,14 @@
 import { useState } from "react";
 import { loginUser, setAuthToken } from "../../services/api";
 
-export default function LoginPage({ onAuthenticated, onGoSignup }) {
-  const [identifier, setIdentifier] = useState("");
+export default function LoginPage({
+  onAuthenticated,
+  onGoSignup,
+  onGoForgot,
+  notice = null,
+  initialIdentifier = "",
+}) {
+  const [identifier, setIdentifier] = useState(initialIdentifier);
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState(null);
@@ -39,6 +45,8 @@ export default function LoginPage({ onAuthenticated, onGoSignup }) {
           Enter your username or email below to login to your account
         </p>
 
+        {notice && <p style={styles.notice}>{notice}</p>}
+
         <form onSubmit={handleLogin} style={styles.form}>
           <div style={styles.fieldGroup}>
             <label style={styles.label}>Username or Email</label>
@@ -55,7 +63,7 @@ export default function LoginPage({ onAuthenticated, onGoSignup }) {
           <div style={styles.fieldGroup}>
             <div style={styles.passwordHeader}>
               <label style={styles.label}>Password</label>
-              <button type="button" style={styles.forgotLink} onClick={() => {}}>
+              <button type="button" style={styles.forgotLink} onClick={onGoForgot}>
                 Forgot your password?
               </button>
             </div>
@@ -200,6 +208,15 @@ const styles = {
     fontSize: "13px",
     color: "#dc2626",
     margin: 0,
+  },
+  notice: {
+    fontSize: "13px",
+    color: "#166534",
+    backgroundColor: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    borderRadius: "6px",
+    padding: "8px 12px",
+    margin: "0 0 16px 0",
   },
   switchText: {
     textAlign: "center",

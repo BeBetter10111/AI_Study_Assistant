@@ -18,6 +18,20 @@ export const registerUser = (data) =>
 export const loginUser = (identifier, password) =>
   api.post("/auth/login", { identifier, password });
 
+// Quên mật khẩu: email -> mã UUID trong email -> mật khẩu mới
+export const forgotPassword = (email) =>
+  api.post("/auth/forgot-password", { email });
+
+export const verifyResetCode = (email, code) =>
+  api.post("/auth/verify-reset-code", { email, code });
+
+export const resetPassword = (resetToken, newPassword, confirmPassword) =>
+  api.post("/auth/reset-password", {
+    reset_token: resetToken,
+    new_password: newPassword,
+    confirm_password: confirmPassword,
+  });
+
 export const uploadDocument = (file) => {
   const form = new FormData();
   form.append("file", file);

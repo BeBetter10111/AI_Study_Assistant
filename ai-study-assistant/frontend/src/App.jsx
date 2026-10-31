@@ -9,6 +9,9 @@ import QuizPlayer from "./features/quiz/QuizPlayer";
 import FlashcardDeck from "./features/flashcard/FlashcardDeck";
 import LoginPage from "./features/auth/LoginPage";
 import SignupPage from "./features/auth/SignupPage";
+import ForgotPasswordPage from "./features/auth/ForgotPasswordPage";
+import VerifyCodePage from "./features/auth/VerifyCodePage";
+import ResetPasswordPage from "./features/auth/ResetPasswordPage";
 
 const UPLOAD_CONCURRENCY = 3;
 const ALLOWED_EXT = /\.(pdf|docx|pptx|md)$/i;
@@ -20,24 +23,60 @@ const TABS = [
   { key: "flashcard", label: "Thẻ ghi nhớ" },
 ];
 
-// "login" | "signup"
-const AUTH_SCREEN = { LOGIN: "login", SIGNUP: "signup" };
+// login -> forgot (email) -> verify (mã UUID trong email) -> reset (mật khẩu mới) -> login
+const AUTH_SCREEN = {
+  LOGIN: "login",
+  SIGNUP: "signup",
+  FORGOT: "forgot",
+  VERIFY: "verify",
+  RESET: "reset",
+};
+
+// Chuyển màn hình an toàn khi render (tránh gọi setState trực tiếp trong render).
+function Navigate({ to, onNavigate }) {
+  useEffect(() => {
+    onNavigate(to);
+  }, [to, onNavigate]);
+  return null;
+}
 
 export default function App() {
   const [userEmail, setUserEmail] = useState(null);
   const [authScreen, setAuthScreen] = useState(AUTH_SCREEN.LOGIN);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetToken, setResetToken] = useState(null); // chỉ giữ trong bộ nhớ, không lưu localStorage
+  const [loginNotice, setLoginNotice] = useState(null);
   const [activeTab, setActiveTab] = useState("chat");
   const [documentId, setDocumentId] = useState(null); // null = search all documents
   const [uploads, setUploads] = useState([]); // [{key, name, id, status, error}]
 
   const handleAuthenticated = (email) => setUserEmail(email);
 
+  const goLogin = (notice = null) => {
+    setLoginNotice(notice);
+    setResetToken(null);
+    setAuthScreen(AUTH_SCREEN.LOGIN);
+  };
+
+  const goSignup = () => {
+    setResetToken(null);
+    setAuthScreen(AUTH_SCREEN.SIGNUP);
+  };
+
+  const handleResetSuccess = () => {
+    // Mật khẩu đã đổi: xoá mọi phiên/token lưu sẵn và bắt user đăng nhập lại bằng mật khẩu mới.
+    setAuthToken(null);
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_email");
+    goLogin("Your password has been updated. Please log in with your new password.");
+  };
+
   const handleLogout = () => {
     setAuthToken(null);
     setUserEmail(null);
     setDocumentId(null);
     setUploads([]);
-    setAuthScreen(AUTH_SCREEN.LOGIN);
+    goLogin();
   };
 
   const updateUpload = (key, patch) =>
@@ -100,20 +139,69 @@ export default function App() {
   const embeddedCount = uploads.filter((u) => u.status === "embedded").length;
 
   if (!userEmail) {
-    if (authScreen === AUTH_SCREEN.SIGNUP) {
-      return (
-        <SignupPage
-          onAuthenticated={handleAuthenticated}
-          onGoLogin={() => setAuthScreen(AUTH_SCREEN.LOGIN)}
-        />
-      );
+    switch (authScreen) {
+      case AUTH_SCREEN.SIGNUP:
+        return <SignupPage onAuthenticated={handleAuthenticated} onGoLogin={() => goLogin()} />;
+
+      case AUTH_SCREEN.FORGOT:
+        return (
+          <ForgotPasswordPage
+            initialEmail={resetEmail}
+            onCodeSent={(email) => {
+              setResetEmail(email);
+              setAuthScreen(AUTH_SCREEN.VERIFY);
+            }}
+            onGoLogin={() => goLogin()}
+            onGoSignup={goSignup}
+          />
+        );
+
+      case AUTH_SCREEN.VERIFY:
+        if (!resetEmail) return <Navigate to={AUTH_SCREEN.FORGOT} onNavigate={setAuthScreen} />;
+        return (
+          <VerifyCodePage
+            email={resetEmail}
+            onVerified={(token) => {
+              setResetToken(token);
+              setAuthScreen(AUTH_SCREEN.RESET);
+            }}
+            onChangeEmail={() => setAuthScreen(AUTH_SCREEN.FORGOT)}
+            onGoLogin={() => goLogin()}
+            onGoSignup={goSignup}
+          />
+        );
+
+      case AUTH_SCREEN.RESET:
+        // Không có reset_token (refresh trang, vào thẳng) -> bắt đầu lại từ bước 1.
+        if (!resetToken) return <Navigate to={AUTH_SCREEN.FORGOT} onNavigate={setAuthScreen} />;
+        return (
+          <ResetPasswordPage
+            resetToken={resetToken}
+            onSuccess={handleResetSuccess}
+            onSessionExpired={() => {
+              setResetToken(null);
+              setAuthScreen(AUTH_SCREEN.FORGOT);
+            }}
+            onGoLogin={() => goLogin()}
+            onGoSignup={goSignup}
+          />
+        );
+
+      default:
+        return (
+          <LoginPage
+            key={loginNotice || "login"}
+            onAuthenticated={handleAuthenticated}
+            onGoSignup={goSignup}
+            onGoForgot={() => {
+              setLoginNotice(null);
+              setAuthScreen(AUTH_SCREEN.FORGOT);
+            }}
+            notice={loginNotice}
+            initialIdentifier={loginNotice ? resetEmail : ""}
+          />
+        );
     }
-    return (
-      <LoginPage
-        onAuthenticated={handleAuthenticated}
-        onGoSignup={() => setAuthScreen(AUTH_SCREEN.SIGNUP)}
-      />
-    );
   }
 
   return (

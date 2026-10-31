@@ -18,9 +18,31 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role            = Column(String(50),  nullable=False, default="Staff")
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
+    # Set whenever the password is reset; JWTs issued before this moment are rejected.
+    password_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     documents = relationship("Document", back_populates="owner")
     quiz_attempts = relationship("QuizAttempt", back_populates="user")
+
+
+class PasswordResetToken(Base):
+    """Mã xác nhận đặt lại mật khẩu (UUID gửi qua email).
+
+    Chỉ lưu SHA-256 của mã, không lưu mã gốc: lộ DB cũng không dùng được mã.
+    Mỗi mã dùng một lần, hết hạn sau PASSWORD_RESET_EXPIRE_MINUTES.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id         = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    token_hash      = Column(String(64), nullable=False, index=True)
+    expires_at      = Column(DateTime(timezone=True), nullable=False)
+    verified_at     = Column(DateTime(timezone=True), nullable=True)
+    used            = Column(Boolean, nullable=False, default=False)
+    failed_attempts = Column(Integer, nullable=False, default=0)
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class UserRLState(Base):

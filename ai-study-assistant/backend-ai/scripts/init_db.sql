@@ -6,20 +6,23 @@ CREATE TABLE IF NOT EXISTS users (
     phone         VARCHAR(30)  UNIQUE,
     hashed_password VARCHAR(255) NOT NULL,
     role          VARCHAR(50)  NOT NULL DEFAULT 'Staff',
-    created_at    TIMESTAMPTZ  DEFAULT now()
+    created_at    TIMESTAMPTZ  DEFAULT now(),
+    password_changed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
-    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token      VARCHAR(36) NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    used       BOOLEAN     NOT NULL DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT now()
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash      VARCHAR(64) NOT NULL,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    verified_at     TIMESTAMPTZ,
+    used            BOOLEAN     NOT NULL DEFAULT false,
+    failed_attempts INT         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_prt_token   ON password_reset_tokens(token);
-CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_prt_user_id    ON password_reset_tokens(user_id);
 
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
