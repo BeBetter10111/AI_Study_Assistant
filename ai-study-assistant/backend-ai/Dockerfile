@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 FROM deps as runtime
 
 # Fix outlines broken airport import (pyairports stub doesn't have airports module)
-RUN sed -i "s/from pyairports.airports import AIRPORT_LIST/AIRPORT_LIST = []  # stub/" /usr/local/lib/python3.11/site-packages/outlines/types/airports.py
+# RUN sed -i "s/from pyairports.airports import AIRPORT_LIST/AIRPORT_LIST = []  # stub/" /usr/local/lib/python3.11/site-packages/outlines/types/airports.py
 
 COPY . .
 
