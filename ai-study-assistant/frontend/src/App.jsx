@@ -23,7 +23,6 @@ const TABS = [
   { key: "flashcard", label: "Thẻ ghi nhớ" },
 ];
 
-// login -> forgot (email) -> verify (mã UUID trong email) -> reset (mật khẩu mới) -> login
 const AUTH_SCREEN = {
   LOGIN: "login",
   SIGNUP: "signup",
@@ -32,7 +31,6 @@ const AUTH_SCREEN = {
   RESET: "reset",
 };
 
-// Chuyển màn hình an toàn khi render (tránh gọi setState trực tiếp trong render).
 function Navigate({ to, onNavigate }) {
   useEffect(() => {
     onNavigate(to);
@@ -64,7 +62,6 @@ export default function App() {
   };
 
   const handleResetSuccess = () => {
-    // Mật khẩu đã đổi: xoá mọi phiên/token lưu sẵn và bắt user đăng nhập lại bằng mật khẩu mới.
     setAuthToken(null);
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_email");
@@ -86,7 +83,7 @@ export default function App() {
     const files = Array.from(event.target.files || []).filter((f) =>
       ALLOWED_EXT.test(f.name)
     );
-    event.target.value = ""; // allow choosing the same files again
+    event.target.value = ""; 
     if (!files.length) return;
 
     const stamp = Date.now();
@@ -141,7 +138,14 @@ export default function App() {
   if (!userEmail) {
     switch (authScreen) {
       case AUTH_SCREEN.SIGNUP:
-        return <SignupPage onAuthenticated={handleAuthenticated} onGoLogin={() => goLogin()} />;
+        return (
+          <SignupPage
+            onGoLogin={(notice, email) => {
+              if (email) setResetEmail(email);
+              goLogin(notice);
+            }}
+          />
+        );
 
       case AUTH_SCREEN.FORGOT:
         return (
@@ -172,7 +176,6 @@ export default function App() {
         );
 
       case AUTH_SCREEN.RESET:
-        // Không có reset_token (refresh trang, vào thẳng) -> bắt đầu lại từ bước 1.
         if (!resetToken) return <Navigate to={AUTH_SCREEN.FORGOT} onNavigate={setAuthScreen} />;
         return (
           <ResetPasswordPage

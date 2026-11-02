@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { registerUser, loginUser, setAuthToken } from "../../services/api";
+import { registerUser } from "../../services/api";
 
 const ROLES = ["Admin", "User"];
 
-export default function SignupPage({ onAuthenticated, onGoLogin }) {
+export default function SignupPage({ onGoLogin }) {
   const [form, setForm] = useState({
     username: "",
     fullName: "",
@@ -39,11 +39,8 @@ export default function SignupPage({ onAuthenticated, onGoLogin }) {
     setIsLoading(true);
     try {
       await registerUser(form.email.trim(), form.password);
-      // Auto-login after successful registration
-      const loginRes = await loginUser(form.email.trim(), form.password);
-      const { access_token: token } = loginRes.data;
-      setAuthToken(token);
-      onAuthenticated(form.email.trim(), token);
+      // Đăng ký thành công → chuyển sang trang Login kèm thông báo
+      onGoLogin("Đăng ký thành công! Vui lòng đăng nhập để tiếp tục.", form.email.trim());
     } catch (err) {
       setError(err.response?.data?.detail || "Sign up failed. Please try again.");
     } finally {
