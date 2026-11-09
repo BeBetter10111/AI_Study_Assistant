@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { registerUser } from "../../services/api";
 
-const ROLES = ["Admin", "User"];
+const ROLES = ["Staff", "Viewer", "Manager", "Admin"];
 
 export default function SignupPage({ onGoLogin }) {
   const [form, setForm] = useState({
@@ -38,8 +38,14 @@ export default function SignupPage({ onGoLogin }) {
 
     setIsLoading(true);
     try {
-      await registerUser(form.email.trim(), form.password);
-      // Đăng ký thành công → chuyển sang trang Login kèm thông báo
+      await registerUser({
+        username: form.username.trim(),
+        full_name: form.fullName.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        password: form.password,
+        role: form.role || "Staff",
+      });
       onGoLogin("Đăng ký thành công! Vui lòng đăng nhập để tiếp tục.", form.email.trim());
     } catch (err) {
       setError(err.response?.data?.detail || "Sign up failed. Please try again.");
@@ -152,7 +158,7 @@ export default function SignupPage({ onGoLogin }) {
 
         <p style={styles.switchText}>
           Already have an account?{" "}
-          <button type="button" style={styles.switchLink} onClick={onGoLogin}>
+          <button type="button" style={styles.switchLink} onClick={() => onGoLogin()}>
             Login
           </button>
         </p>
