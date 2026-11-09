@@ -1,7 +1,22 @@
 import { useState } from "react";
 import { registerUser } from "../../services/api";
 
-const ROLES = ["Staff", "Viewer", "Manager", "Admin"];
+const extractErrorMessage = (err) => {
+  if (!err.response) {
+    return "Không thể kết nối tới server (Network Error). Vui lòng kiểm tra backend.";
+  }
+  const detail = err.response.data?.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail.map((d) => d.msg || JSON.stringify(d)).join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    return JSON.stringify(detail);
+  }
+  return err.message || "Sign up failed. Please try again.";
+};
 
 export default function SignupPage({ onGoLogin }) {
   const [form, setForm] = useState({
@@ -11,7 +26,6 @@ export default function SignupPage({ onGoLogin }) {
     phone: "",
     password: "",
     confirmPassword: "",
-    role: "",
   });
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -40,15 +54,15 @@ export default function SignupPage({ onGoLogin }) {
     try {
       await registerUser({
         username: form.username.trim(),
-        full_name: form.fullName.trim(),
+        full_name: form.fullName.trim() || null,
         email: form.email.trim(),
-        phone: form.phone.trim(),
+        phone: form.phone.trim() || null,
         password: form.password,
-        role: form.role || "Staff",
+        role: "Staff",
       });
-      onGoLogin("Đăng ký thành công! Vui lòng đăng nhập để tiếp tục.", form.email.trim());
+      onGoLogin("Sign up succeed! Please login.", form.email.trim());
     } catch (err) {
-      setError(err.response?.data?.detail || "Sign up failed. Please try again.");
+      setError(extractErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -130,23 +144,6 @@ export default function SignupPage({ onGoLogin }) {
               autoComplete="new-password"
               disabled={isLoading}
             />
-          </div>
-
-          <div style={styles.fieldGroup}>
-            <label style={styles.label}>Role</label>
-            <select
-              style={styles.select}
-              value={form.role}
-              onChange={handleChange("role")}
-              disabled={isLoading}
-            >
-              <option value="">Select your role</option>
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
           </div>
 
           {error && <p style={styles.error}>{error}</p>}
