@@ -16,25 +16,26 @@ async def test_health_check(app_client):
 async def test_register_then_login(app_client):
     email = "frog@example.com"
     password = "hunter22"
+    username = "froguser"
 
     register_response = await app_client.post(
-        "/api/auth/register", json={"email": email, "password": password}
+        "/api/auth/register", json={"username": username, "email": email, "password": password}
     )
     assert register_response.status_code == 201
     assert "access_token" in register_response.json()
 
     dup_response = await app_client.post(
-        "/api/auth/register", json={"email": email, "password": password}
+        "/api/auth/register", json={"username": username, "email": email, "password": password}
     )
     assert dup_response.status_code == 409
 
     bad_login = await app_client.post(
-        "/api/auth/login", json={"email": email, "password": "wrong"}
+        "/api/auth/login", json={"identifier": email, "password": "wrong"}
     )
     assert bad_login.status_code == 401
 
     good_login = await app_client.post(
-        "/api/auth/login", json={"email": email, "password": password}
+        "/api/auth/login", json={"identifier": email, "password": password}
     )
     assert good_login.status_code == 200
     assert "access_token" in good_login.json()
@@ -50,7 +51,8 @@ async def test_upload_requires_auth(app_client):
 
 async def test_upload_rejects_unsupported_extension(app_client):
     register_response = await app_client.post(
-        "/api/auth/register", json={"email": "ext@example.com", "password": "hunter22"}
+        "/api/auth/register",
+        json={"username": "extuser", "email": "ext@example.com", "password": "hunter22"},
     )
     token = register_response.json()["access_token"]
 
@@ -103,7 +105,8 @@ async def test_quiz_submit_requires_auth(app_client):
 
 async def test_quiz_submit_with_auth_updates_difficulty(app_client):
     register_response = await app_client.post(
-        "/api/auth/register", json={"email": "quiz@example.com", "password": "hunter22"}
+        "/api/auth/register",
+        json={"username": "quizuser", "email": "quiz@example.com", "password": "hunter22"},
     )
     token = register_response.json()["access_token"]
 
@@ -120,7 +123,8 @@ async def test_quiz_submit_with_auth_updates_difficulty(app_client):
 
 async def test_quiz_submit_rejects_negative_response_time(app_client):
     register_response = await app_client.post(
-        "/api/auth/register", json={"email": "neg@example.com", "password": "hunter22"}
+        "/api/auth/register",
+        json={"username": "neguser", "email": "neg@example.com", "password": "hunter22"},
     )
     token = register_response.json()["access_token"]
 

@@ -39,16 +39,27 @@ function Navigate({ to, onNavigate }) {
 }
 
 export default function App() {
-  const [userEmail, setUserEmail] = useState(null);
+  const [userEmail, setUserEmail] = useState(() => {
+    const savedToken = localStorage.getItem("auth_token");
+    const savedEmail = localStorage.getItem("auth_email");
+    if (savedToken && savedEmail) {
+      setAuthToken(savedToken);
+      return savedEmail;
+    }
+    return null;
+  });
   const [authScreen, setAuthScreen] = useState(AUTH_SCREEN.LOGIN);
   const [resetEmail, setResetEmail] = useState("");
-  const [resetToken, setResetToken] = useState(null); // chỉ giữ trong bộ nhớ, không lưu localStorage
+  const [resetToken, setResetToken] = useState(null); 
   const [loginNotice, setLoginNotice] = useState(null);
   const [activeTab, setActiveTab] = useState("chat");
-  const [documentId, setDocumentId] = useState(null); // null = search all documents
-  const [uploads, setUploads] = useState([]); // [{key, name, id, status, error}]
+  const [documentId, setDocumentId] = useState(null);
+  const [uploads, setUploads] = useState([]); 
 
-  const handleAuthenticated = (email) => setUserEmail(email);
+  const handleAuthenticated = (email, token) => {
+    if (token) setAuthToken(token);
+    setUserEmail(email);
+  };
 
   const goLogin = (notice = null) => {
     setLoginNotice(notice);
@@ -70,6 +81,8 @@ export default function App() {
 
   const handleLogout = () => {
     setAuthToken(null);
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_email");
     setUserEmail(null);
     setDocumentId(null);
     setUploads([]);
