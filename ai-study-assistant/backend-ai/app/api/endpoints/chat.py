@@ -3,14 +3,17 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import iterate_in_threadpool
 
+from app.api.dependencies import get_current_user
+from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core.llm_engine import llm_engine
+from app.models.models import User
 from app.rag.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -266,7 +269,8 @@ def _build_citations(hits: List[Dict[str, Any]]) -> List[Citation]:
 
 # Main endpoint
 @router.post("/query", response_model=QueryResponse)
-async def query(payload: QueryRequest):
+@limiter.limit("30/minute")
+async def query(request: Request, payload: QueryRequest, current_user: User = Depends(get_current_user)):
     question = payload.question.strip()
     if not question:
         raise HTTPException(
@@ -303,11 +307,13 @@ async def query(payload: QueryRequest):
         _rewrite_query, question, payload.history
     )
 
-    # 2. Hybrid (dense + BM25) search; fetch_k/alpha come from settings
+    # 2. Hybrid (dense + BM25) search scoped to the calling user's documents.
+    #    owner_id ensures a user can never read chunks belonging to another user.
     hits = vector_store.search_similar_chunks(
         query=standalone_query,
         limit=payload.top_k,
         document_id=payload.document_id,
+        owner_id=str(current_user.id),
     )
 
     if not hits:
@@ -368,7 +374,8 @@ _INTENT_LABELS = {
 
 
 @router.post("/query/stream")
-async def query_stream(payload: QueryRequest):
+@limiter.limit("30/minute")
+async def query_stream(request: Request, payload: QueryRequest, current_user: User = Depends(get_current_user)):
     """Same pipeline as ``/query`` but streams Server-Sent Events:
 
     * ``{"type": "step", "id", "label", "status": "running"|"done", "detail"?, "ms"?}``
@@ -382,6 +389,9 @@ async def query_stream(payload: QueryRequest):
     question = payload.question.strip()
     if not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question cannot be empty.")
+
+    # Capture owner_id from the authenticated user for use inside the closure.
+    owner_id = str(current_user.id)
 
     async def events():
         start_time = time.perf_counter()
@@ -432,12 +442,13 @@ async def query_stream(payload: QueryRequest):
                 yield done("rewrite", "Rewriting your follow-up as a standalone question",
                            standalone_query if standalone_query != question else "No rewrite needed")
 
-            # 2. Hybrid search + re-rank
+            # 2. Hybrid search + re-rank — scoped to the authenticated user's documents
             yield running("search", "Searching your document")
             hits = await run_in_threadpool(
                 vector_store.search_similar_chunks,
                 query=standalone_query, limit=payload.top_k,
                 document_id=payload.document_id,
+                owner_id=owner_id,
             )
             if not hits:
                 yield done("search", "Searching your document", "No matching passages found")

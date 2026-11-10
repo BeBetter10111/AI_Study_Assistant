@@ -138,6 +138,14 @@ class VectorStoreManager:
                     )
                 except Exception as exc:
                     logger.warning(f"Could not create payload index on document_id: {exc}")
+                try:  # speeds up per-owner filter — critical for user data isolation
+                    self.client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name="owner_id",
+                        field_schema=models.PayloadSchemaType.KEYWORD,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Could not create payload index on owner_id: {exc}")
                 logger.info(f"Created Qdrant collection '{self.collection_name}' "
                             f"(dense={self.VECTOR_SIZE}, sparse={SPARSE_NAME}).")
                 return
@@ -167,12 +175,16 @@ class VectorStoreManager:
         chunks: List[ChunkData],
         document_id: str,
         start_chunk_idx: int = 0,
+        owner_id: Optional[str] = None,
     ) -> bool:
         """Embed chunks (dense + BM25 sparse) and upsert into Qdrant.
 
         :param chunks: List of ``ChunkData`` from ingestion.py
         :param document_id: Parent document UUID
         :param start_chunk_idx: Offset for chunk_index (for incremental ingestion)
+        :param owner_id: UUID of the user who owns this document.
+                         Stored in every point payload so that searches can be
+                         scoped to the calling user (prevents cross-user data leakage).
         :return: True on success
         """
         if not chunks:
@@ -200,6 +212,11 @@ class VectorStoreManager:
                     "content": chunk.content,
                     "is_summary": chunk.extra.get("is_summary", False),
                 }
+                # Security: store owner_id so search can filter by user.
+                # This prevents any user from reading another user's document
+                # chunks by guessing/iterating document UUIDs.
+                if owner_id:
+                    payload["owner_id"] = str(owner_id)
                 # Persist structural metadata — only include keys that have values
                 if chunk.page_number is not None:
                     payload["page_number"] = chunk.page_number
@@ -241,6 +258,7 @@ class VectorStoreManager:
         query: str,
         limit: int = 4,
         document_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
         fetch_k: Optional[int] = None,
         alpha: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
@@ -248,7 +266,15 @@ class VectorStoreManager:
 
         :param query: User query (any language)
         :param limit: Final number of results to return
-        :param document_id: Filter to a specific document (optional)
+        :param document_id: Filter to a specific document (optional).
+                            When supplied together with owner_id both conditions
+                            must match (AND logic) so a user can only search
+                            within their own document.
+        :param owner_id: UUID of the calling user.  When provided, every Qdrant
+                         query is scoped to points owned by that user, preventing
+                         cross-user data leakage.  Should always be set for
+                         authenticated endpoints — omit only for internal/admin
+                         tooling that intentionally operates across all users.
         :param fetch_k: Candidates fetched per leg (default ``settings.rag_fetch_k``)
         :param alpha: Weight of the dense leg in the fusion, 0..1
                       (default ``settings.rag_hybrid_alpha``; 1.0 = dense only,
@@ -266,16 +292,24 @@ class VectorStoreManager:
 
             self._ensure_collection()
 
-            query_filter = None
-            if document_id:
-                query_filter = qdrant_models.Filter(
-                    must=[
-                        qdrant_models.FieldCondition(
-                            key="document_id",
-                            match=qdrant_models.MatchValue(value=str(document_id)),
-                        )
-                    ]
+            # Build a Qdrant Filter that enforces ownership + optional doc scope.
+            # Using "must" (AND) so ALL conditions must match simultaneously.
+            must_conditions = []
+            if owner_id:
+                must_conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="owner_id",
+                        match=qdrant_models.MatchValue(value=str(owner_id)),
+                    )
                 )
+            if document_id:
+                must_conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="document_id",
+                        match=qdrant_models.MatchValue(value=str(document_id)),
+                    )
+                )
+            query_filter = qdrant_models.Filter(must=must_conditions) if must_conditions else None
 
             requests = []
             if alpha > 0:

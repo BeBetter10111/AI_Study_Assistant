@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # Final score = w * rerank + (1 - w) * fusion (both min-max normalised).
     rag_rerank_weight: float = 0.7
 
+    # CORS — comma-separated list of allowed frontend origins.
+    # Default allows the local Vite dev server.
+    # In production set to your actual domain, e.g.:
+    #   ALLOWED_ORIGINS=https://app.example.com
+    # NEVER leave this as "*" in production — it allows any website to make
+    # credentialed (JWT-bearing) requests to your API on behalf of your users.
+    allowed_origins: str = "http://localhost:5173"
+
     # RAGAS evaluation (python -m app.rag.evaluation) — never used by the API itself.
     # Judge LLM: "ollama" (default, reuses OLLAMA_BASE_URL) or "openai" (any
     # OpenAI-compatible server: vLLM, OpenAI, ...).  A judge stronger than the

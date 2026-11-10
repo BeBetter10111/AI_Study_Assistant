@@ -45,6 +45,10 @@ pyarrow==21.0.0
 
 requests==2.31.0
 
+# Rate limiting — backed by Redis (the same instance already used by Celery).
+# slowapi is a thin Starlette/FastAPI wrapper around the limits library.
+slowapi==0.1.9
+
 # RAGAS — tự động tính metrics RAG (app/rag/evaluation.py). Chỉ dùng khi chạy
 # `python -m app.rag.evaluation`, không nằm trong luồng API.
 ragas==0.2.15

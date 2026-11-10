@@ -1,5 +1,7 @@
-from fastapi import Depends, FastAPI, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.concurrency import run_in_threadpool
@@ -8,12 +10,20 @@ from app.core.llm_engine import llm_engine
 
 from app.api.dependencies import get_db
 from app.api.endpoints import auth, chat, documents, quiz
+from app.api.security.rate_limiter import limiter
+from app.config import settings
 
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# CORS origin list — parsed from the settings value at startup.
+# ---------------------------------------------------------------------------
+ALLOWED_ORIGINS = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -36,11 +46,32 @@ async def lifespan(_app):
 
 app = FastAPI(title="AI Study Assistant", version="0.1.0", lifespan=lifespan)
 
+# ---------------------------------------------------------------------------
+# Rate limiter — must be attached before routers are mounted.
+# Returns HTTP 429 with Retry-After when a limit is exceeded.
+# ---------------------------------------------------------------------------
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    retry_after = getattr(exc, "retry_after", None)
+    headers = {"Retry-After": str(retry_after)} if retry_after else {}
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please slow down and try again later."},
+        headers=headers,
+    )
+
+# ---------------------------------------------------------------------------
+# CORS — explicit allow-list instead of wildcard "*".
+# ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,       # allow cookies / Authorization headers
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

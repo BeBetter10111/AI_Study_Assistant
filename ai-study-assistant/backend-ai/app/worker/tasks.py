@@ -43,7 +43,7 @@ def _update_document_status(document_id: str, status: str) -> None:
 
 
 @celery_app.task(name="task_process_document", bind=True, max_retries=3)
-def task_process_document(self, document_id: str, storage_path: str, mime_type: str):
+def task_process_document(self, document_id: str, storage_path: str, mime_type: str, owner_id: str = ""):
     _update_document_status(document_id, "chunking")
 
     suffix = os.path.splitext(storage_path)[1]
@@ -59,7 +59,8 @@ def task_process_document(self, document_id: str, storage_path: str, mime_type: 
         if not chunks:
             raise ValueError("No valid chunks created after processing the document.")
 
-        vector_store.upsert_chunks(chunks, document_id)
+        # Pass owner_id so every Qdrant point carries the owner for access-control filtering.
+        vector_store.upsert_chunks(chunks, document_id, owner_id=owner_id or None)
         _update_document_status(document_id, "embedded")
         logger.info(
             f"Document {document_id} processed successfully: {len(chunks)} chunks "

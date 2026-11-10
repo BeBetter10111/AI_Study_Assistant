@@ -2,12 +2,13 @@ import logging
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
+from app.api.security.rate_limiter import limiter
 from app.core.llm_engine import llm_engine
 from app.models.models import QuizAttempt, User
 from app.rag.vector_store import vector_store
@@ -87,7 +88,9 @@ _DIFFICULTY_INSTRUCTION: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 @router.post("/generate", response_model=GenerateQuizResponse)
+@limiter.limit("20/minute")
 async def generate_quiz(
+    request: Request,
     payload: GenerateQuizRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -101,9 +104,11 @@ async def generate_quiz(
     # ưu tiên RL state — không cho client override để tránh gian lận độ khó.
     difficulty = rl_difficulty
 
-    # 2) Lấy context từ vector store
+    # 2) Lấy context từ vector store — scoped to the authenticated user's documents
     hits = vector_store.search_similar_chunks(
-        query=payload.topic, limit=8, document_id=payload.document_id
+        query=payload.topic, limit=8,
+        document_id=payload.document_id,
+        owner_id=str(current_user.id),
     )
     if not hits:
         raise HTTPException(

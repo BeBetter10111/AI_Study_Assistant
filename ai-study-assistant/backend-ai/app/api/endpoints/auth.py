@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db
+from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core.email import send_password_reset_email
 from app.models.models import PasswordResetToken, User
@@ -24,7 +25,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 MAX_PASSWORD_LENGTH = 72
 
-VALID_ROLES = {"Admin", "Manager", "Staff", "Viewer"}
+# Roles that can be self-assigned at public registration.
+# Admin / Manager can only be granted by an existing Admin through a separate
+# admin-only endpoint (not yet implemented) — never accepted from the public
+# signup form to prevent privilege escalation.
+PUBLIC_SELF_REGISTER_ROLE = "Student"
 
 
 class RegisterRequest(BaseModel):
@@ -33,14 +38,9 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     phone: Optional[str] = Field(default=None, max_length=30)
     password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
-    role: str = Field(default="Staff", max_length=50)
-
-    @field_validator("role")
-    @classmethod
-    def validate_role(cls, v: str) -> str:
-        if v not in VALID_ROLES:
-            raise ValueError(f"role must be one of {sorted(VALID_ROLES)}")
-        return v
+    # `role` is intentionally NOT accepted from the client at public registration.
+    # The field is removed to avoid accidental privilege escalation: previously
+    # any caller could POST {"role": "Admin"} and become an admin immediately.
 
 
 class LoginRequest(BaseModel):
@@ -63,7 +63,8 @@ def _create_access_token(user_id: str) -> str:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def register(request: Request, payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
     # Check uniqueness for username, email, and phone in a single query
     filters = [
         User.username == payload.username,
@@ -82,13 +83,16 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number is already registered.")
 
+    # Security: role is ALWAYS forced to the default unprivileged role at public
+    # registration — never read from the client payload.  An Admin must use the
+    # dedicated admin endpoint (future work) to elevate a user's role.
     user = User(
         username=payload.username,
         full_name=payload.full_name,
         email=payload.email,
         phone=payload.phone or None,
         hashed_password=pwd_context.hash(payload.password),
-        role=payload.role,
+        role=PUBLIC_SELF_REGISTER_ROLE,
     )
     db.add(user)
     await db.commit()
@@ -98,7 +102,8 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     # Allow login by either username or email
     result = await db.execute(
         select(User).where(
@@ -176,7 +181,9 @@ async def _find_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
+@limiter.limit("5/minute")
 async def forgot_password(
+    request: Request,
     payload: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -223,7 +230,8 @@ async def forgot_password(
 
 
 @router.post("/verify-reset-code", response_model=VerifyResetCodeResponse)
-async def verify_reset_code(payload: VerifyResetCodeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def verify_reset_code(request: Request, payload: VerifyResetCodeRequest, db: AsyncSession = Depends(get_db)):
     """Bước 2: kiểm tra mã trong email. Đúng -> cấp reset_token ngắn hạn để sang bước đặt mật khẩu."""
     invalid = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_CODE_MESSAGE)
 
@@ -277,7 +285,8 @@ async def verify_reset_code(payload: VerifyResetCodeRequest, db: AsyncSession = 
 
 
 @router.post("/reset-password", response_model=MessageResponse)
-async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def reset_password(request: Request, payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     """Bước 3: đặt mật khẩu mới. Cập nhật user + tiêu thụ mã trong cùng một transaction."""
     session_error = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_SESSION_MESSAGE)
 
