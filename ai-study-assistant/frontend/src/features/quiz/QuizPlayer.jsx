@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { generateQuiz, submitQuizResult } from "../../services/api";
+import { generateQuiz, getErrorMessage, submitQuizResult } from "../../services/api";
 
 const STATUS = {
   IDLE: "idle",
@@ -63,7 +63,7 @@ export default function QuizPlayer({ documentId = null }) {
       setStatus(STATUS.PLAYING);
     } catch (err) {
       const detail =
-        err.response?.data?.detail || err.message || "Không thể tạo quiz.";
+        getErrorMessage(err, err.message || "Không thể tạo quiz.");
       setErrorMessage(detail);
       setStatus(STATUS.ERROR);
     }

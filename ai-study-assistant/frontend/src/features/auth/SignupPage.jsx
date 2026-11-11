@@ -3,7 +3,13 @@ import { api, registerUser } from "../../services/api";
 
 const extractErrorMessage = (err) => {
   if (!err.response) {
-    return "Không thể kết nối tới server (Network Error). Vui lòng kiểm tra backend đang chạy.";
+    // Không có response = request không tới được backend hoặc bị CORS chặn.
+    // Hiện rõ URL đã gọi và origin của trang để biết ngay chỗ sai.
+    const target = api.defaults.baseURL || "(VITE_API_BASE_URL chưa được cấu hình)";
+    return (
+      `Không thể kết nối tới server (Network Error) tại ${target}. ` +
+      `Vui lòng kiểm tra backend đang chạy và ALLOWED_ORIGINS cho phép ${window.location.origin}.`
+    );
   }
   const detail = err.response.data?.detail;
   if (typeof detail === "string") {

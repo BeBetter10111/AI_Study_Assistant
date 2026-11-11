@@ -6,10 +6,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db
@@ -22,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Hash giả để login luôn tốn thời gian bcrypt dù user không tồn tại -> không lộ
+# "tài khoản này có tồn tại không" qua thời gian phản hồi.
+_DUMMY_HASH = pwd_context.hash("timing-equalisation-only")
 
 MAX_PASSWORD_LENGTH = 72
 
@@ -76,16 +82,27 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     # Security: role is ALWAYS forced to the default unprivileged role at public
     # registration — never read from the client payload.  An Admin must use the
     # dedicated admin endpoint (future work) to elevate a user's role.
+    # bcrypt ~100-300ms CPU: chạy trong threadpool để không chặn event loop.
+    hashed_password = await run_in_threadpool(pwd_context.hash, payload.password)
     user = User(
         username=payload.username,
         full_name=payload.full_name,
         email=payload.email,
         phone=payload.phone or None,
-        hashed_password=pwd_context.hash(payload.password),
+        hashed_password=hashed_password,
         role=PUBLIC_SELF_REGISTER_ROLE,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Bấm Sign up 2 lần / 2 request song song: cả hai cùng qua bước kiểm tra trùng ở
+        # trên, request thứ hai vi phạm UNIQUE -> trước đây trả 500.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username, email or phone number is already registered.",
+        ) from exc
     await db.refresh(user)
 
     return TokenResponse(access_token=_create_access_token(str(user.id)))
@@ -102,7 +119,9 @@ async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depe
     )
     user = result.scalar_one_or_none()
 
-    if user is None or not pwd_context.verify(payload.password, user.hashed_password):
+    stored_hash = user.hashed_password if user is not None else _DUMMY_HASH
+    password_ok = await run_in_threadpool(pwd_context.verify, payload.password, stored_hash)
+    if user is None or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Identifier or password is incorrect.",
@@ -302,14 +321,14 @@ async def reset_password(request: Request, payload: ResetPasswordRequest, db: As
     if user is None:
         raise session_error
 
-    if pwd_context.verify(payload.new_password, user.hashed_password):
+    if await run_in_threadpool(pwd_context.verify, payload.new_password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="New password must be different from your current password.",
         )
 
     now = _now()
-    user.hashed_password = pwd_context.hash(payload.new_password)
+    user.hashed_password = await run_in_threadpool(pwd_context.hash, payload.new_password)
     user.password_changed_at = now  
     token.used = True
     await db.execute(

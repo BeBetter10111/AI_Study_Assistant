@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { forgotPassword, verifyResetCode } from "../../services/api";
+import { forgotPassword, getErrorMessage, verifyResetCode } from "../../services/api";
 import { authStyles as styles } from "./authStyles";
 import AuthFooterLinks from "./AuthFooterLinks";
 
@@ -30,7 +30,7 @@ export default function VerifyCodePage({ email, onVerified, onChangeEmail, onGoL
       const res = await verifyResetCode(email, value);
       onVerified(res.data.reset_token);
     } catch (err) {
-      setError(err.response?.data?.detail || "Verification failed. Please try again.");
+      setError(getErrorMessage(err, "Verification failed. Please try again."));
     } finally {
       setIsLoading(false);
     }
@@ -46,7 +46,7 @@ export default function VerifyCodePage({ email, onVerified, onChangeEmail, onGoL
       setCode("");
       setInfo("A new code has been sent. Previous codes are no longer valid.");
     } catch (err) {
-      setError(err.response?.data?.detail || "Could not resend the code.");
+      setError(getErrorMessage(err, "Could not resend the code."));
     }
   };
 

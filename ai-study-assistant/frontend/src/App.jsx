@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import {
+  getErrorMessage,
   setAuthToken,
+  setUnauthorizedHandler,
   uploadDocument,
   getDocumentStatus,
 } from "./services/api";
@@ -55,6 +57,22 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("chat");
   const [documentId, setDocumentId] = useState(null);
   const [uploads, setUploads] = useState([]); 
+
+  // Token hết hạn / bị vô hiệu hoá (ví dụ đã đổi mật khẩu ở nơi khác): quay về màn hình đăng nhập.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthToken(null);
+      localStorage.removeItem("auth_token");
+      localStorage.removeItem("auth_email");
+      setUserEmail(null);
+      setDocumentId(null);
+      setUploads([]);
+      setResetToken(null);
+      setLoginNotice("Your session has expired. Please log in again.");
+      setAuthScreen(AUTH_SCREEN.LOGIN);
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   const handleAuthenticated = (email, token) => {
     if (token) setAuthToken(token);
@@ -120,7 +138,7 @@ export default function App() {
         } catch (err) {
           updateUpload(item.key, {
             status: "failed",
-            error: err.response?.data?.detail || "Failed to upload file.",
+            error: getErrorMessage(err, "Failed to upload file."),
           });
         }
       }

@@ -47,9 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Chỉ in thông tin để dễ kiểm tra trong log build (không làm fail build).
 RUN uv pip list 2>/dev/null | grep -i -E '^(torch|nvidia)' || true
 
-# =============================================================================
 # Stage 2 — runtime: image cuối, chỉ có tesseract + venv đã build sẵn + code
-# =============================================================================
 FROM python:3.11-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

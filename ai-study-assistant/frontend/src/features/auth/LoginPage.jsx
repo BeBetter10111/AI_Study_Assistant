@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { loginUser, setAuthToken } from "../../services/api";
+import { getErrorMessage, loginUser, setAuthToken } from "../../services/api";
 
 export default function LoginPage({
   onAuthenticated,
@@ -29,7 +29,7 @@ export default function LoginPage({
       }
       onAuthenticated(identifier.trim(), token);
     } catch (err) {
-      setError(err.response?.data?.detail || "Login failed. Please check your credentials.");
+      setError(getErrorMessage(err, "Login failed. Please check your credentials."));
     } finally {
       setIsLoading(false);
     }

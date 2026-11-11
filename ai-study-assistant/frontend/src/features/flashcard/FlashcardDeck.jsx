@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { generateQuiz } from "../../services/api";
+import { generateQuiz, getErrorMessage } from "../../services/api";
 
 const RECALL_LEVELS = [
   { key: "again", label: "Not remembered" },
@@ -40,7 +40,7 @@ export default function FlashcardDeck({ documentId = null }) {
       setRecallCounts({});
     } catch (err) {
       const detail =
-        err.response?.data?.detail || err.message || "Unable to generate flashcard deck.";
+        getErrorMessage(err, err.message || "Unable to generate flashcard deck.");
       setErrorMessage(detail);
     } finally {
       setIsLoading(false);

@@ -132,20 +132,32 @@ class LLMEngineManager:
                 "num_predict": max_tokens,
             },
         }
-        with httpx.stream("POST", f"{self.ollama_base_url}/api/chat", json=payload, timeout=settings.ollama_timeout_s) as r:
-            r.raise_for_status()
-            for line in r.iter_lines():
-                if not line: continue
-                data = json.loads(line)
-                if data.get("done"):
-                    yield {"done": True,
-                        "eval_count": data.get("eval_count"),
-                        "eval_duration": data.get("eval_duration"),
-                        "prompt_eval_duration": data.get("prompt_eval_duration")}
-                    return
-                token = data.get("message", {}).get("content", "")
-                if token:
-                    yield {"token": token}
+        produced_any = False
+        try:
+            with httpx.stream("POST", f"{self.ollama_base_url}/api/chat", json=payload, timeout=settings.ollama_timeout_s) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get("done"):
+                        yield {"done": True,
+                            "eval_count": data.get("eval_count"),
+                            "eval_duration": data.get("eval_duration"),
+                            "prompt_eval_duration": data.get("prompt_eval_duration")}
+                        return
+                    token = data.get("message", {}).get("content", "")
+                    if token:
+                        produced_any = True
+                        yield {"token": token}
+        except Exception as exc:
+            # Cùng cách xử lý với generate_rag_response: lỗi kết nối/timeout/thiếu model
+            # được đổi thành thông báo thân thiện thay vì "Something went wrong: <exception thô>".
+            if produced_any:
+                raise  # đã stream dở câu trả lời -> để tầng trên báo lỗi
+            logger.error(f"Error with Ollama when streaming RAG response: {str(exc)}")
+            yield {"token": self._ollama_error_message(exc)}
+            yield {"done": True}
 
     def _ollama_error_message(self, exc: Exception) -> str:
         if isinstance(exc, httpx.ConnectError):

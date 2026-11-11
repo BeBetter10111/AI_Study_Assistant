@@ -5,22 +5,20 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
 from app.core.llm_engine import llm_engine
-from app.models.models import QuizAttempt, User
+from app.models.models import Document, QuizAttempt, User
 from app.rag.vector_store import vector_store
 from app.rl import agent as rl_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
 # Schemas
-# ---------------------------------------------------------------------------
-
 class QuizQuestion(BaseModel):
     question: str
     options: List[str] = Field(min_length=2, max_length=8)
@@ -37,9 +35,6 @@ class GenerateQuizRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     num_questions: int = Field(default=10, ge=1, le=50)
     document_id: Optional[str] = None
-    # difficulty có thể được client gợi ý, nhưng backend luôn ưu tiên
-    # giá trị đọc từ RL state. Trường này chỉ là fallback khi user chưa có
-    # lịch sử (mặc định "medium").
     difficulty: Optional[str] = Field(default=None, pattern=r"^(easy|medium|hard)$")
 
 
@@ -47,7 +42,7 @@ class GenerateQuizResponse(BaseModel):
     quiz_id: str
     topic: str
     questions: List[QuizQuestion]
-    difficulty: str  # độ khó đã được áp dụng — để frontend hiển thị
+    difficulty: str  
 
 
 class SubmitQuizRequest(BaseModel):
@@ -62,9 +57,7 @@ class SubmitQuizResponse(BaseModel):
     next_difficulty: str  # độ khó cho bài tiếp theo — frontend dùng để hiển thị
 
 
-# ---------------------------------------------------------------------------
 # Difficulty prompt fragments
-# ---------------------------------------------------------------------------
 
 _DIFFICULTY_INSTRUCTION: dict[str, str] = {
     "easy": (
@@ -83,10 +76,7 @@ _DIFFICULTY_INSTRUCTION: dict[str, str] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Endpoints
-# ---------------------------------------------------------------------------
-
 @router.post("/generate", response_model=GenerateQuizResponse)
 @limiter.limit("20/minute")
 async def generate_quiz(
@@ -105,7 +95,9 @@ async def generate_quiz(
     difficulty = rl_difficulty
 
     # 2) Lấy context từ vector store — scoped to the authenticated user's documents
-    hits = vector_store.search_similar_chunks(
+    #    Threadpool: tránh chặn event loop bằng embedding/Qdrant/re-ranker (xem chat.py).
+    hits = await run_in_threadpool(
+        vector_store.search_similar_chunks,
         query=payload.topic, limit=8,
         document_id=payload.document_id,
         owner_id=str(current_user.id),
@@ -184,6 +176,17 @@ async def submit_quiz_result(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="quiz_id hoặc document_id không hợp lệ.",
         ) from exc
+
+    if document_uuid is not None:
+        owned = await db.execute(
+            select(Document.id).where(
+                Document.id == document_uuid, Document.owner_id == current_user.id
+            )
+        )
+        if owned.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Document not found."
+            )
 
     # Lưu attempt vào DB
     attempt = QuizAttempt(

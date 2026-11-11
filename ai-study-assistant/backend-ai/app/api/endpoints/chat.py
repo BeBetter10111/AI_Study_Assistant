@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -107,11 +108,9 @@ def _is_identity_question(question: str) -> bool:
     return len(lowered) <= 80 and any(kw in lowered for kw in IDENTITY_KEYWORDS)
 
 def _identity_answer(question: str) -> str:
-    return IDENTITY_SYSTEM + "\n\n" + (
-        "I am an AI study assistant that can help you understand and review your uploaded documents. "
-        "You can ask me questions about the content, request summaries, explanations, or quizzes. "
-        "Please upload a document and ask me anything about it."
-    )
+    # IDENTITY_SYSTEM đã là một câu trả lời hoàn chỉnh; trước đây còn nối thêm một đoạn
+    # lặp lại y hệt nội dung nên người dùng thấy câu trả lời bị nhân đôi.
+    return IDENTITY_SYSTEM
 
 # Intent classification
 def _classify_intent(question: str) -> str:
@@ -129,6 +128,10 @@ def _classify_intent(question: str) -> str:
 
 
 # Conversational query rewriter
+_VAGUE_REFERENCE_RE = re.compile(
+    r"(?<!\w)(?:it|this|that|they|them|he|she|nó|đó|họ|điều này|vấn đề này)(?!\w)",
+    re.IGNORECASE,
+)
 _REWRITE_SYSTEM = (
     "You are a query rewriting assistant. "
     "Given a conversation history and a follow-up question, rewrite the follow-up "
@@ -150,11 +153,9 @@ def _rewrite_query(question: str, history: List[HistoryMessage]) -> str:
 
     # Simple heuristic: if the question has no pronouns / vague references,
     # it is likely already standalone.
-    vague_tokens = ("it", "this", "that", "they", "them", "he", "she",
-                    "nó", "đó", "họ", "điều này", "vấn đề này")
-    lowered = question.lower()
-    needs_rewrite = any(tok in lowered for tok in vague_tokens)
-    if not needs_rewrite:
+    # Khớp theo TỪ NGUYÊN VẸN. Trước đây dùng `tok in lowered` (so khớp chuỗi con) nên
+    # "it" khớp "with"/"write", "he" khớp "the"... -> luôn gọi LLM để rewrite dù không cần.
+    if not _VAGUE_REFERENCE_RE.search(question):
         return question
 
     # Build a short history string (last 6 turns max to keep prompt short)
@@ -245,7 +246,7 @@ def _build_prompts(intent: str, hits: List[Dict[str, Any]], standalone_query: st
     if intent == "explanation":
         return _EXPLAIN_SYSTEM, f"Context snippets:\n{context}\n\nRequest: {standalone_query}"
     if intent == "identity":
-        return _IDENTITY_SYSTEM, f"Context snippets:\n{context}\n\nRequest: {standalone_query}"
+        return IDENTITY_SYSTEM, f"Context snippets:\n{context}\n\nRequest: {standalone_query}"
     return _QA_SYSTEM, f"Context snippets:\n{context}\n\nQuestion: {standalone_query}"
 
 
@@ -308,7 +309,11 @@ async def query(request: Request, payload: QueryRequest, current_user: User = De
 
     # 2. Hybrid (dense + BM25) search scoped to the calling user's documents.
     #    owner_id ensures a user can never read chunks belonging to another user.
-    hits = vector_store.search_similar_chunks(
+    #    Chạy trong threadpool: embedding + Qdrant + re-ranker là code đồng bộ/nặng CPU;
+    #    gọi thẳng trong `async def` sẽ chặn cả event loop (mọi request khác, kể cả đăng nhập
+    #    và /health, bị đứng trong lúc truy vấn).
+    hits = await run_in_threadpool(
+        vector_store.search_similar_chunks,
         query=standalone_query,
         limit=payload.top_k,
         document_id=payload.document_id,

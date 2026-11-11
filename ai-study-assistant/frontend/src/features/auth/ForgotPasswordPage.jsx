@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { forgotPassword } from "../../services/api";
+import { forgotPassword, getErrorMessage } from "../../services/api";
 import { authStyles as styles } from "./authStyles";
 import AuthFooterLinks from "./AuthFooterLinks";
 
@@ -20,7 +20,7 @@ export default function ForgotPasswordPage({ initialEmail = "", onCodeSent, onGo
       // Backend luôn trả thành công (không lộ email nào tồn tại) -> sang bước nhập mã.
       onCodeSent(value);
     } catch (err) {
-      setError(err.response?.data?.detail?.[0]?.msg || err.response?.data?.detail || "Could not send the code. Please try again.");
+      setError(getErrorMessage(err, "Could not send the code. Please try again."));
     } finally {
       setIsLoading(false);
     }

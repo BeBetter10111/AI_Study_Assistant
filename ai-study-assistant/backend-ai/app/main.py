@@ -118,12 +118,23 @@ async def lifespan(_app):
 
 app = FastAPI(title="AI Study Assistant", version="0.1.0", lifespan=lifespan)
 
+# Rate limiter — must be attached before routers are mounted.
+# Returns HTTP 429 with Retry-After when a limit is exceeded.
 app.state.limiter = limiter
+
+
+def _retry_after_seconds(exc: RateLimitExceeded) -> int | None:
+    """Độ dài cửa sổ giới hạn (giây). slowapi KHÔNG có thuộc tính ``retry_after``
+    (code cũ dùng getattr nên header Retry-After không bao giờ được gửi)."""
+    try:
+        return int(exc.limit.limit.get_expiry())
+    except Exception:  # noqa: BLE001 - không để lỗi phụ làm hỏng response 429
+        return None
 
 
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-    retry_after = getattr(exc, "retry_after", None)
+    retry_after = _retry_after_seconds(exc)
     headers = {"Retry-After": str(retry_after)} if retry_after else {}
     return JSONResponse(
         status_code=429,
@@ -133,6 +144,7 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
 
 app.add_middleware(UnhandledErrorMiddleware)
 
+# CORS — explicit allow-list instead of wildcard "*".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

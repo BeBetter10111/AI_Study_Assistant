@@ -17,7 +17,6 @@ from app.rag.chunking import (
     chunk_docx_sections,
     chunk_pdf_pages,
     chunk_pptx_slides,
-    chunk_text,
 )
 
 logger = logging.getLogger(__name__)

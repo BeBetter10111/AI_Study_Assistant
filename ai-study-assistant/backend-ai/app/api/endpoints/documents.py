@@ -1,9 +1,11 @@
 import io
+import logging
 import mimetypes
 import os
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +16,7 @@ from app.core.database import minio_client
 from app.models.models import Document, User
 from app.worker.tasks import task_process_document
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".md"}
@@ -118,7 +121,21 @@ async def upload_document(
     await db.commit()
 
     # Pass owner_id to Celery so the worker can store it in every Qdrant point.
-    task_process_document.delay(str(document.id), storage_path, mime_type, str(current_user.id))
+    # .delay() là một lệnh gọi mạng đồng bộ tới Redis broker: chạy trong threadpool, và nếu
+    # broker lỗi thì báo 503 rõ ràng (trước đây: 500 sau khi file đã lưu, document kẹt "pending").
+    try:
+        await run_in_threadpool(
+            task_process_document.delay,
+            str(document.id), storage_path, mime_type, str(current_user.id),
+        )
+    except Exception as exc:
+        logger.exception("Could not enqueue processing for document %s", document.id)
+        document.status = "failed"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The document was saved but the processing queue is unavailable. Please try again later.",
+        ) from exc
 
     return {"document_id": str(document.id), "status": document.status}
 

@@ -12,6 +12,48 @@ export const setAuthToken = (token) => {
   }
 };
 
+// Gọi khi một request ĐÃ ĐĂNG NHẬP nhận 401: token hết hạn, hoặc bị vô hiệu hoá sau khi đổi
+// mật khẩu. App đăng ký handler để đưa người dùng về màn hình đăng nhập thay vì để họ kẹt
+// với những request lỗi liên tục.
+let unauthorizedHandler = null;
+export const setUnauthorizedHandler = (handler) => {
+  unauthorizedHandler = handler;
+};
+
+const notifyUnauthorized = () => {
+  if (api.defaults.headers.common.Authorization && unauthorizedHandler) unauthorizedHandler();
+};
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const url = error?.config?.url || "";
+    // 401 của chính các endpoint /auth/* (sai mật khẩu...) là lỗi nhập liệu bình thường.
+    if (error?.response?.status === 401 && !url.startsWith("/auth/")) notifyUnauthorized();
+    return Promise.reject(error);
+  }
+);
+
+// FastAPI trả `detail` là chuỗi (HTTPException) hoặc MẢNG (lỗi validation 422). Render thẳng mảng
+// object trong JSX làm React crash -> trắng trang, nên luôn đổi về chuỗi.
+const formatDetail = (detail) => {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((d) => d?.msg || JSON.stringify(d)).join("; ");
+  }
+  return null;
+};
+
+export const getErrorMessage = (err, fallback) => {
+  if (err && !err.response && err.request) {
+    return (
+      `Cannot reach the server at ${api.defaults.baseURL || "(VITE_API_BASE_URL is not set)"}. ` +
+      "Please check that the backend is running."
+    );
+  }
+  return formatDetail(err?.response?.data?.detail) || fallback;
+};
+
 export const registerUser = (data) =>
   api.post("/auth/register", data);
 
@@ -73,10 +115,11 @@ export const askQuestionStream = async (question, documentId, onEvent, topK = 4)
     body: JSON.stringify({ question, document_id: documentId, top_k: topK }),
   });
 
+  if (response.status === 401) notifyUnauthorized();
   if (!response.ok || !response.body) {
     let detail = "An error occurred while connecting to the AI assistant.";
     try {
-      detail = (await response.json()).detail || detail;
+      detail = formatDetail((await response.json()).detail) || detail;
     } catch {
       /* non-JSON error body */
     }
