@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { registerUser } from "../../services/api";
+import { api, registerUser } from "../../services/api";
 
 const extractErrorMessage = (err) => {
   if (!err.response) {
-    return "Không thể kết nối tới server (Network Error). Vui lòng kiểm tra backend.";
+    return "Không thể kết nối tới server (Network Error). Vui lòng kiểm tra backend đang chạy.";
   }
   const detail = err.response.data?.detail;
   if (typeof detail === "string") {

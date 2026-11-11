@@ -59,5 +59,17 @@ limiter = Limiter(
     key_func=_get_user_or_ip,
     storage_uri=settings.redis_url,
     default_limits=[],          # no blanket default; each endpoint sets its own
-    headers_enabled=True,       # expose X-RateLimit-* response headers
+    # PHẢI để False. Với headers_enabled=True, slowapi bắt buộc MỌI endpoint có
+    # @limiter.limit khai báo thêm tham số `response: Response` (khi endpoint trả
+    # về model/dict như TokenResponse). Thiếu tham số đó, slowapi ném
+    #   Exception: parameter `response` must be an instance of starlette...Response
+    # SAU KHI endpoint đã chạy xong (user đã được commit vào DB) -> HTTP 500 ->
+    # trình duyệt chỉ báo "Network Error". Khi bị giới hạn, header Retry-After
+    # vẫn được trả về bởi handler RateLimitExceeded trong main.py.
+    headers_enabled=False,
+    # Nếu Redis tạm thời không kết nối được, KHÔNG để register/login nổ 500
+    # (frontend sẽ chỉ thấy "Network Error"). Chuyển sang đếm trong bộ nhớ
+    # của tiến trình — giới hạn vẫn còn hiệu lực — và tự quay lại Redis khi
+    # Redis hoạt động trở lại. Lỗi vẫn được ghi log cảnh báo.
+    in_memory_fallback_enabled=True,
 )

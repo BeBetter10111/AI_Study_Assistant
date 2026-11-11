@@ -1,26 +1,100 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
+
 from fastapi import Depends, FastAPI, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi.concurrency import run_in_threadpool
-from app.rag import vector_store as vs
-from app.core.llm_engine import llm_engine
 
 from app.api.dependencies import get_db
 from app.api.endpoints import auth, chat, documents, quiz
 from app.api.security.rate_limiter import limiter
 from app.config import settings
-
-import asyncio
-import logging
-from contextlib import asynccontextmanager
+from app.core.llm_engine import llm_engine
+from app.rag import vector_store as vs
 
 logger = logging.getLogger(__name__)
 
+_LOCAL_HOSTS = ("localhost", "127.0.0.1")
+
+
+def _expand_local_origins(origins: list[str]) -> list[str]:
+    """Với mỗi origin dev (localhost / 127.0.0.1), thêm origin "anh em" của nó.
+
+    Trình duyệt coi ``http://localhost:5173`` và ``http://127.0.0.1:5173`` là
+    HAI origin khác nhau. Nếu .env chỉ khai báo localhost mà bạn mở web bằng
+    127.0.0.1 thì mọi request bị CORS chặn và axios chỉ báo "Network Error".
+    Origin production (domain thật) không bị ảnh hưởng.
+    """
+    expanded = list(origins)
+    for origin in origins:
+        try:
+            parts = urlsplit(origin)
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            continue
+        if host not in _LOCAL_HOSTS:
+            continue
+        for other in _LOCAL_HOSTS:
+            if other == host:
+                continue
+            alt = f"{parts.scheme}://{other}" + (f":{port}" if port else "")
+            if alt not in expanded:
+                expanded.append(alt)
+    return expanded
+
+
 # CORS origin list — parsed from the settings value at startup.
-ALLOWED_ORIGINS = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+ALLOWED_ORIGINS = _expand_local_origins(
+    [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+)
+
+
+class UnhandledErrorMiddleware:
+    """Biến exception chưa được xử lý thành JSON 500 *nằm bên trong* CORS.
+
+    Starlette đặt ServerErrorMiddleware ở lớp NGOÀI CÙNG, bên ngoài
+    CORSMiddleware, nên một lỗi 500 bất ngờ (DB/Redis lỗi, bug...) được trả về
+    KHÔNG có header Access-Control-Allow-Origin. Trình duyệt chặn response đó
+    và axios chỉ thấy "Network Error" — che mất lỗi thật. Middleware này bắt lỗi
+    ở lớp trong để CORS vẫn gắn header, giúp frontend đọc được 500 và backend
+    log đầy đủ traceback.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def tracking_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception:
+            if response_started:
+                raise  # header đã gửi đi, không thể đổi thành 500 nữa
+            logger.exception(
+                "Unhandled error on %s %s", scope.get("method"), scope.get("path")
+            )
+            response = JSONResponse(
+                {"detail": "Internal server error. Check the backend logs."},
+                status_code=500,
+            )
+            await response(scope, receive, send)
 
 
 @asynccontextmanager
@@ -44,8 +118,6 @@ async def lifespan(_app):
 
 app = FastAPI(title="AI Study Assistant", version="0.1.0", lifespan=lifespan)
 
-# Rate limiter — must be attached before routers are mounted.
-# Returns HTTP 429 with Retry-After when a limit is exceeded.
 app.state.limiter = limiter
 
 
@@ -59,7 +131,8 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
         headers=headers,
     )
 
-# CORS — explicit allow-list instead of wildcard "*".
+app.add_middleware(UnhandledErrorMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
