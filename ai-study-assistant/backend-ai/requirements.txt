@@ -12,6 +12,10 @@ qdrant-client==1.11.2
 minio==7.2.9
 redis==5.0.8
 celery==5.4.0
+# celery chỉ yêu cầu kombu>=5.3.4,<6 nên pip/uv sẽ lấy bản mới nhất (5.7.x), bản đó
+# đòi redis-py>=6.4 cho Redis transport. Với redis==5.0.8 ở trên, worker sẽ chết ngay
+# khi khởi động: kombu.exceptions.VersionMismatch. Ghim kombu về bản tương thích.
+kombu==5.4.2
 python-multipart==0.0.9
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
