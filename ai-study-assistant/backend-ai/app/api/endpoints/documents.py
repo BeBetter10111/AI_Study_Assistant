@@ -17,10 +17,7 @@ from app.worker.tasks import task_process_document
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".md"}
-# Reduced from 400 MB: large scanned PDFs processed by CPU-based Tesseract OCR
-# exhaust RAM and block the entire Celery worker.  50 MB is a reasonable cap;
-# raise via env var if your deployment has sufficient resources.
-MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+MAX_UPLOAD_SIZE_BYTES = 150 * 1024 * 1024  
 
 # Magic bytes (file signatures) for allowed formats.
 # Checked AFTER reading the file so we validate actual content, not just the

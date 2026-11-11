@@ -30,6 +30,7 @@ export default function QuizPlayer({ documentId = null }) {
   const [questionStartedAt, setQuestionStartedAt] = useState(null);
   const [score, setScore] = useState(0);
 
+  
   // Độ khó hiện tại (được backend xác định theo RL state của user)
   const [currentDifficulty, setCurrentDifficulty] = useState(null);
   // Độ khó tiếp theo (nhận về sau mỗi lần submit — dùng để hiển thị thông báo)

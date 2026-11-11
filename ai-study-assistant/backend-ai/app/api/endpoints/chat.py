@@ -129,7 +129,6 @@ def _classify_intent(question: str) -> str:
 
 
 # Conversational query rewriter
-
 _REWRITE_SYSTEM = (
     "You are a query rewriting assistant. "
     "Given a conversation history and a follow-up question, rewrite the follow-up "

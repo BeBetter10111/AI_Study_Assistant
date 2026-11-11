@@ -19,9 +19,7 @@ from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # CORS origin list — parsed from the settings value at startup.
-# ---------------------------------------------------------------------------
 ALLOWED_ORIGINS = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
 
 
@@ -46,10 +44,8 @@ async def lifespan(_app):
 
 app = FastAPI(title="AI Study Assistant", version="0.1.0", lifespan=lifespan)
 
-# ---------------------------------------------------------------------------
 # Rate limiter — must be attached before routers are mounted.
 # Returns HTTP 429 with Retry-After when a limit is exceeded.
-# ---------------------------------------------------------------------------
 app.state.limiter = limiter
 
 
@@ -63,9 +59,7 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
         headers=headers,
     )
 
-# ---------------------------------------------------------------------------
 # CORS — explicit allow-list instead of wildcard "*".
-# ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

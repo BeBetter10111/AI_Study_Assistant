@@ -18,7 +18,6 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role            = Column(String(50),  nullable=False, default="Staff")
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
-    # Set whenever the password is reset; JWTs issued before this moment are rejected.
     password_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     documents = relationship("Document", back_populates="owner")

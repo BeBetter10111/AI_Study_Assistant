@@ -32,7 +32,7 @@ _STOPWORDS = frozenset(
 # Bumping this constant (or changing the tokenizer) requires re-ingestion.
 BM25_K1 = 1.2
 BM25_B = 0.75
-BM25_AVG_LEN = 128.0  # assumed average chunk length (tokens); IDF is server-side
+BM25_AVG_LEN = 128.0  
 
 
 def fold_diacritics(text: str) -> str:
@@ -48,7 +48,6 @@ def _words(text: str) -> List[str]:
 
 
 def tokenize(text: str, bigrams: bool = True) -> Tuple[List[str], int]:
-    """Return ``(terms, n_words)``; ``terms`` may repeat (used for TF)."""
     words = _words(text)
     terms: List[str] = []
     for w in words:

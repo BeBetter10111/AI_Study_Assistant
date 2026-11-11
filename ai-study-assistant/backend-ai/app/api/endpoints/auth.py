@@ -25,10 +25,6 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 MAX_PASSWORD_LENGTH = 72
 
-# Roles that can be self-assigned at public registration.
-# Admin / Manager can only be granted by an existing Admin through a separate
-# admin-only endpoint (not yet implemented) — never accepted from the public
-# signup form to prevent privilege escalation.
 PUBLIC_SELF_REGISTER_ROLE = "Student"
 
 
@@ -38,13 +34,9 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     phone: Optional[str] = Field(default=None, max_length=30)
     password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
-    # `role` is intentionally NOT accepted from the client at public registration.
-    # The field is removed to avoid accidental privilege escalation: previously
-    # any caller could POST {"role": "Admin"} and become an admin immediately.
 
 
 class LoginRequest(BaseModel):
-    # Accept username OR email in the same field
     identifier: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
 
@@ -57,7 +49,6 @@ class TokenResponse(BaseModel):
 def _create_access_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.access_token_expire_minutes)
-    # "iat" cho phép vô hiệu hoá token cũ sau khi user đổi mật khẩu (xem get_current_user).
     payload = {"sub": user_id, "exp": expire, "iat": now.timestamp()}  # float: phân biệt được token cấp trước/sau trong cùng một giây
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
@@ -65,7 +56,6 @@ def _create_access_token(user_id: str) -> str:
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
 async def register(request: Request, payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    # Check uniqueness for username, email, and phone in a single query
     filters = [
         User.username == payload.username,
         User.email == payload.email,
@@ -121,9 +111,6 @@ async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depe
     return TokenResponse(access_token=_create_access_token(str(user.id)))
 
 
-# ---------------------------------------------------------------------------
-# Quên mật khẩu: forgot-password -> verify-reset-code -> reset-password
-# ---------------------------------------------------------------------------
 RESET_PURPOSE = "password_reset"
 GENERIC_FORGOT_MESSAGE = "If an account exists for that email, a verification code has been sent."
 INVALID_CODE_MESSAGE = "Invalid or expired code. Please check the code or request a new one."
@@ -188,7 +175,6 @@ async def forgot_password(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Bước 1: nhận email, gửi mã UUID. Luôn trả cùng một thông báo để không lộ email nào đã đăng ký."""
     user = await _find_user_by_email(db, payload.email)
     if user is None:
         return MessageResponse(message=GENERIC_FORGOT_MESSAGE)
@@ -208,7 +194,6 @@ async def forgot_password(
             # Chống spam email: bỏ qua im lặng, vẫn trả thông báo chung.
             return MessageResponse(message=GENERIC_FORGOT_MESSAGE)
 
-    # Mã mới làm mọi mã cũ chưa dùng mất hiệu lực -> chỉ còn đúng một mã hợp lệ mỗi user.
     await db.execute(
         update(PasswordResetToken)
         .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used.is_(False))
@@ -224,7 +209,6 @@ async def forgot_password(
     )
     await db.commit()
 
-    # Gửi nền: thời gian phản hồi không phụ thuộc email có tồn tại hay không.
     background_tasks.add_task(send_password_reset_email, user.email, code)
     return MessageResponse(message=GENERIC_FORGOT_MESSAGE)
 
@@ -232,7 +216,6 @@ async def forgot_password(
 @router.post("/verify-reset-code", response_model=VerifyResetCodeResponse)
 @limiter.limit("10/minute")
 async def verify_reset_code(request: Request, payload: VerifyResetCodeRequest, db: AsyncSession = Depends(get_db)):
-    """Bước 2: kiểm tra mã trong email. Đúng -> cấp reset_token ngắn hạn để sang bước đặt mật khẩu."""
     invalid = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_CODE_MESSAGE)
 
     user = await _find_user_by_email(db, payload.email)
@@ -287,7 +270,6 @@ async def verify_reset_code(request: Request, payload: VerifyResetCodeRequest, d
 @router.post("/reset-password", response_model=MessageResponse)
 @limiter.limit("10/minute")
 async def reset_password(request: Request, payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
-    """Bước 3: đặt mật khẩu mới. Cập nhật user + tiêu thụ mã trong cùng một transaction."""
     session_error = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_SESSION_MESSAGE)
 
     try:
@@ -302,7 +284,6 @@ async def reset_password(request: Request, payload: ResetPasswordRequest, db: As
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match.")
 
-    # Khoá hàng token: hai request song song cùng dùng một mã thì chỉ một request thắng.
     token = (
         await db.execute(
             select(PasswordResetToken).where(PasswordResetToken.id == token_id).with_for_update()
@@ -329,9 +310,8 @@ async def reset_password(request: Request, payload: ResetPasswordRequest, db: As
 
     now = _now()
     user.hashed_password = pwd_context.hash(payload.new_password)
-    user.password_changed_at = now  # đăng xuất mọi phiên cũ
+    user.password_changed_at = now  
     token.used = True
-    # Huỷ mọi mã reset khác còn hiệu lực của user này.
     await db.execute(
         update(PasswordResetToken)
         .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used.is_(False))

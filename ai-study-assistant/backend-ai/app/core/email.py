@@ -1,4 +1,3 @@
-"""Gửi email (SMTP) cho luồng quên mật khẩu."""
 import logging
 import smtplib
 import ssl
@@ -26,11 +25,9 @@ def _send(message: EmailMessage) -> None:
 
 
 def send_password_reset_email(to_email: str, code: str) -> None:
-    """Gửi mã reset. Chạy trong BackgroundTasks nên không bao giờ được ném lỗi ra ngoài."""
     minutes = settings.password_reset_expire_minutes
 
     if not settings.smtp_host:
-        # Môi trường dev chưa cấu hình SMTP: in mã ra log của backend để test luồng.
         logger.warning("SMTP_HOST is empty - password reset code for %s: %s", to_email, code)
         return
 
@@ -46,5 +43,5 @@ def send_password_reset_email(to_email: str, code: str) -> None:
     )
     try:
         _send(message)
-    except Exception:  # noqa: BLE001 - không để lộ lỗi SMTP cho client
+    except Exception:  
         logger.exception("Failed to send password reset email to %s", to_email)

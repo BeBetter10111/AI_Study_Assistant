@@ -1,10 +1,3 @@
-"""Structured chunking with rich metadata (page number, slide title, section).
-
-Each chunk is a dict rather than a bare string so that downstream components
-(vector_store, chat endpoint) can surface precise citations like "Slide 12" or
-"Page 3".  The plain-text fallback still returns ChunkData objects so the rest
-of the pipeline never has to branch on type.
-"""
 from __future__ import annotations
 
 import logging
@@ -27,7 +20,6 @@ class ChunkData:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
-# Low-level text splitter (shared)
 def _make_splitter(max_tokens: int = 512, overlap: int = 50) -> RecursiveCharacterTextSplitter:
     try:
         return RecursiveCharacterTextSplitter.from_tiktoken_encoder(
