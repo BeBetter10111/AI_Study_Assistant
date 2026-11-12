@@ -74,6 +74,18 @@ export const resetPassword = (resetToken, newPassword, confirmPassword) =>
     confirm_password: confirmPassword,
   });
 
+// Hồ sơ cá nhân và đổi mật khẩu (cần đăng nhập). Đổi mật khẩu trả về token mới vì token cũ bị thu hồi.
+export const getMe = () => api.get("/auth/me");
+
+export const updateProfile = (data) => api.patch("/auth/me", data);
+
+export const changePassword = (currentPassword, newPassword, confirmPassword) =>
+  api.post("/auth/change-password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+    confirm_password: confirmPassword,
+  });
+
 export const uploadDocument = (file) => {
   const form = new FormData();
   form.append("file", file);

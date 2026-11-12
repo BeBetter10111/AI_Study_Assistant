@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getErrorMessage,
+  getMe,
   setAuthToken,
   setUnauthorizedHandler,
   uploadDocument,
@@ -14,16 +15,21 @@ import SignupPage from "./features/auth/SignupPage";
 import ForgotPasswordPage from "./features/auth/ForgotPasswordPage";
 import VerifyCodePage from "./features/auth/VerifyCodePage";
 import ResetPasswordPage from "./features/auth/ResetPasswordPage";
+import ProfilePage from "./features/profile/ProfilePage";
+import SettingsPage from "./features/settings/SettingsPage";
+import Sidebar from "./components/Sidebar";
+import Icon from "./components/Icons";
 
 const UPLOAD_CONCURRENCY = 3;
 const ALLOWED_EXT = /\.(pdf|docx|pptx|md)$/i;
 const DONE_STATUSES = ["embedded", "failed"];
 
-const TABS = [
-  { key: "chat", label: "Hỏi đáp" },
-  { key: "quiz", label: "Quiz" },
-  { key: "flashcard", label: "Thẻ ghi nhớ" },
-];
+// Các màn hình sau đăng nhập. Lưu trong URL hash (#/profile) để tải lại trang vẫn ở đúng chỗ.
+const VIEWS = ["chat", "quiz", "flashcard", "profile", "settings"];
+const readView = () => {
+  const name = window.location.hash.replace(/^#\/?/, "");
+  return VIEWS.includes(name) ? name : "chat";
+};
 
 const AUTH_SCREEN = {
   LOGIN: "login",
@@ -54,25 +60,64 @@ export default function App() {
   const [resetEmail, setResetEmail] = useState("");
   const [resetToken, setResetToken] = useState(null); 
   const [loginNotice, setLoginNotice] = useState(null);
-  const [activeTab, setActiveTab] = useState("chat");
+  const [view, setView] = useState(readView);
+  const [navOpen, setNavOpen] = useState(false);
+  const [profile, setProfile] = useState(null);
   const [documentId, setDocumentId] = useState(null);
   const [uploads, setUploads] = useState([]); 
 
-  // Token hết hạn / bị vô hiệu hoá (ví dụ đã đổi mật khẩu ở nơi khác): quay về màn hình đăng nhập.
   useEffect(() => {
-    setUnauthorizedHandler(() => {
-      setAuthToken(null);
-      localStorage.removeItem("auth_token");
-      localStorage.removeItem("auth_email");
-      setUserEmail(null);
-      setDocumentId(null);
-      setUploads([]);
-      setResetToken(null);
-      setLoginNotice("Your session has expired. Please log in again.");
-      setAuthScreen(AUTH_SCREEN.LOGIN);
-    });
-    return () => setUnauthorizedHandler(null);
+    const onHash = () => setView(readView());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  const navigate = (next) => {
+    setNavOpen(false);
+    window.location.hash = `/${next}`;
+  };
+
+  // Token hết hạn / bị vô hiệu hoá (ví dụ đã đổi mật khẩu ở nơi khác): quay về màn hình đăng nhập.
+  const expireSession = useCallback(() => {
+    setAuthToken(null);
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_email");
+    setUserEmail(null);
+    setProfile(null);
+    setDocumentId(null);
+    setUploads([]);
+    setResetToken(null);
+    setLoginNotice("Your session has expired. Please log in again.");
+    setAuthScreen(AUTH_SCREEN.LOGIN);
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(expireSession);
+    return () => setUnauthorizedHandler(null);
+  }, [expireSession]);
+
+  // Lấy hồ sơ thật (họ tên, email...) sau khi đăng nhập. Endpoint /auth/* nằm ngoài interceptor 401
+  // chung, nên 401 ở đây được xử lý riêng: token không còn hợp lệ -> về màn hình đăng nhập.
+  useEffect(() => {
+    if (!userEmail) return undefined;
+    let cancelled = false;
+    getMe()
+      .then((res) => {
+        if (!cancelled) setProfile(res.data);
+      })
+      .catch((err) => {
+        if (!cancelled && err?.response?.status === 401) expireSession();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail, expireSession]);
+
+  // Đổi mật khẩu thu hồi token cũ: nhận token mới và giữ nguyên chế độ "Remember me" nếu đang bật.
+  const handlePasswordChanged = (token) => {
+    setAuthToken(token);
+    if (localStorage.getItem("auth_token")) localStorage.setItem("auth_token", token);
+  };
 
   const handleAuthenticated = (email, token) => {
     if (token) setAuthToken(token);
@@ -102,8 +147,10 @@ export default function App() {
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_email");
     setUserEmail(null);
+    setProfile(null);
     setDocumentId(null);
     setUploads([]);
+    setNavOpen(false);
     goLogin();
   };
 
@@ -164,7 +211,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [uploads]);
 
-  const embeddedCount = uploads.filter((u) => u.status === "embedded").length;
 
   if (!userEmail) {
     switch (authScreen) {
@@ -238,149 +284,66 @@ export default function App() {
     }
   }
 
+  const scopeName = documentId ? uploads.find((u) => u.id === documentId)?.name : null;
+  const scopeLabel = scopeName || "Tất cả tài liệu";
+
   return (
-    <div style={styles.page}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>Explorer</h1>
-        <div>
-          <span style={{ marginRight: "12px" }}>{userEmail}</span>
-          <button style={styles.secondaryButton} onClick={handleLogout}>
-            Log out
-          </button>
-        </div>
-      </header>
+    <div className="app" data-nav={navOpen ? "open" : "closed"}>
+      <Sidebar
+        view={view}
+        onNavigate={navigate}
+        uploads={uploads}
+        documentId={documentId}
+        onSelectDocument={(id) => {
+          setDocumentId(id);
+          setNavOpen(false);
+        }}
+        onFiles={handleFilesChange}
+        profile={profile}
+        fallbackName={userEmail}
+        onLogout={handleLogout}
+        onClose={() => setNavOpen(false)}
+      />
+      <div className="scrim" onClick={() => setNavOpen(false)} />
 
-      <section style={styles.uploadRow}>
-        <input type="file" multiple accept=".pdf,.docx,.pptx,.md" onChange={handleFilesChange} />
-        <label style={styles.statusBadge}>
-          Folder:{" "}
-          <input type="file" multiple webkitdirectory="" onChange={handleFilesChange} />
-        </label>
-        {uploads.length > 0 && (
-          <span style={styles.statusBadge}>
-            {embeddedCount}/{uploads.length} ready
-          </span>
-        )}
-        <select value={documentId || ""} onChange={(e) => setDocumentId(e.target.value || null)}>
-          <option value="">All documents</option>
-          {uploads
-            .filter((u) => u.status === "embedded")
-            .map((u) => (
-              <option key={u.key} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-        </select>
-      </section>
-
-      {uploads.length > 0 && (
-        <ul style={styles.uploadList}>
-          {uploads.map((u) => (
-            <li key={u.key} style={u.status === "failed" ? styles.error : undefined}>
-              {u.name} — {u.status}
-              {u.error ? `: ${u.error}` : ""}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <nav style={styles.tabs}>
-        {TABS.map((tab) => (
+      <div className="main">
+        <div className="topbar">
           <button
-            key={tab.key}
-            style={{
-              ...styles.tabButton,
-              ...(activeTab === tab.key ? styles.tabButtonActive : {}),
-            }}
-            onClick={() => setActiveTab(tab.key)}
+            type="button"
+            className="icon-btn"
+            aria-label="Mở thanh bên"
+            onClick={() => setNavOpen(true)}
           >
-            {tab.label}
+            <Icon name="menu" size={20} />
           </button>
-        ))}
-      </nav>
+          <span className="brand">AI Study Assistant</span>
+        </div>
 
-      <main style={styles.main}>
-        {activeTab === "chat" && <ChatWindow documentId={documentId} />}
-        {activeTab === "quiz" && <QuizPlayer documentId={documentId} />}
-        {activeTab === "flashcard" && <FlashcardDeck documentId={documentId} />}
-      </main>
+        {/* Hỏi đáp / Quiz / Thẻ ghi nhớ luôn được giữ trong bộ nhớ để chuyển trang không mất nội dung. */}
+        <main className="view view--chat" hidden={view !== "chat"}>
+          <ChatWindow documentId={documentId} scopeLabel={scopeLabel} hasDocuments={uploads.length > 0} />
+        </main>
+        <main className="view" hidden={view !== "quiz"}>
+          <QuizPlayer documentId={documentId} scopeLabel={scopeLabel} />
+        </main>
+        <main className="view" hidden={view !== "flashcard"}>
+          <FlashcardDeck documentId={documentId} scopeLabel={scopeLabel} />
+        </main>
+        {view === "profile" && (
+          <main className="view">
+            <ProfilePage profile={profile} onUpdated={setProfile} />
+          </main>
+        )}
+        {view === "settings" && (
+          <main className="view">
+            <SettingsPage
+              profile={profile}
+              onPasswordChanged={handlePasswordChanged}
+              onLogout={handleLogout}
+            />
+          </main>
+        )}
+      </div>
     </div>
   );
 }
-
-const styles = {
-  page: {
-    fontFamily: "system-ui, sans-serif",
-    maxWidth: "760px",
-    margin: "0 auto",
-    padding: "16px",
-    minHeight: "100vh",
-    boxSizing: "border-box",
-  },
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "12px",
-  },
-  title: { fontSize: "20px", margin: 0 },
-  loginBox: {
-    maxWidth: "320px",
-    margin: "80px auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    padding: "24px",
-    border: "1px solid #e2e8f0",
-    borderRadius: "10px",
-  },
-  input: {
-    padding: "8px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-  },
-  primaryButton: {
-    flex: 1,
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "none",
-    backgroundColor: "#2563eb",
-    color: "#fff",
-    cursor: "pointer",
-  },
-  secondaryButton: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#fff",
-    cursor: "pointer",
-  },
-  linkButton: {
-    marginLeft: "8px",
-    border: "none",
-    background: "none",
-    color: "#2563eb",
-    cursor: "pointer",
-    textDecoration: "underline",
-  },
-  error: { color: "#dc2626" },
-  uploadRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    marginBottom: "12px",
-    flexWrap: "wrap",
-  },
-  statusBadge: { fontSize: "14px", color: "#475569" },
-  uploadList: { fontSize: "13px", color: "#475569", margin: "0 0 12px", paddingLeft: "18px" },
-  tabs: { display: "flex", gap: "8px", marginBottom: "12px" },
-  tabButton: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#fff",
-    cursor: "pointer",
-  },
-  tabButtonActive: { backgroundColor: "#2563eb", color: "#fff", borderColor: "#2563eb" },
-  main: { minHeight: "420px" },
-};
