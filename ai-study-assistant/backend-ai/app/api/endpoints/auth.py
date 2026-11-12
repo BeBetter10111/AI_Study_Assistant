@@ -14,7 +14,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db
+from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core.email import send_password_reset_email
@@ -127,6 +127,133 @@ async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depe
             detail="Identifier or password is incorrect.",
         )
 
+    return TokenResponse(access_token=_create_access_token(str(user.id)))
+
+
+# ---------------------------------------------------------------------------
+# Hồ sơ cá nhân & đổi mật khẩu (người dùng đã đăng nhập)
+# ---------------------------------------------------------------------------
+class UserProfile(BaseModel):
+    id: uuid.UUID
+    username: str
+    full_name: Optional[str] = None
+    email: str
+    phone: Optional[str] = None
+    role: str
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class UpdateProfileRequest(BaseModel):
+    # Chỉ các trường được gửi lên mới bị thay đổi. Email cố ý KHÔNG sửa được ở đây: mã đặt lại
+    # mật khẩu gửi tới email, nên đổi email mà không xác minh = chiếm tài khoản bằng một token bị lộ.
+    username: Optional[str] = Field(default=None, max_length=150)
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    phone: Optional[str] = Field(default=None, max_length=30)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+    new_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
+    confirm_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_bytes(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f"password must be at most {MAX_PASSWORD_LENGTH} bytes")
+        return v
+
+
+@router.get("/me", response_model=UserProfile)
+async def read_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@router.patch("/me", response_model=UserProfile)
+@limiter.limit("20/minute")
+async def update_me(
+    request: Request,
+    payload: UpdateProfileRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sent = payload.model_fields_set
+    changes: dict = {}
+
+    if "username" in sent:
+        username = (payload.username or "").strip()
+        if len(username) < 3:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Username must be at least 3 characters.",
+            )
+        changes["username"] = username
+    if "full_name" in sent:
+        changes["full_name"] = (payload.full_name or "").strip() or None
+    if "phone" in sent:
+        changes["phone"] = (payload.phone or "").strip() or None
+
+    if changes.get("username") and changes["username"] != current_user.username:
+        taken = await db.execute(
+            select(User.id).where(User.username == changes["username"], User.id != current_user.id)
+        )
+        if taken.first() is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
+    if changes.get("phone") and changes["phone"] != current_user.phone:
+        taken = await db.execute(
+            select(User.id).where(User.phone == changes["phone"], User.id != current_user.id)
+        )
+        if taken.first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Phone number is already registered."
+            )
+
+    for field, value in changes.items():
+        setattr(current_user, field, value)
+    # current_user thuộc session của dependency get_current_user, không phải session `db` ở trên.
+    # merge() đưa nó vào `db` để commit cùng một chỗ.
+    user = await db.merge(current_user)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username or phone number is already registered.",
+        ) from exc
+    await db.refresh(user)
+    return user
+
+
+@router.post("/change-password", response_model=TokenResponse)
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    payload: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match.")
+
+    if not await run_in_threadpool(pwd_context.verify, payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect.")
+
+    if payload.new_password == payload.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from your current password.",
+        )
+
+    user = await db.merge(current_user)
+    user.hashed_password = await run_in_threadpool(pwd_context.hash, payload.new_password)
+    # Mọi JWT cấp trước thời điểm này (kể cả token đang dùng) mất hiệu lực -> trả token mới.
+    user.password_changed_at = _now()
+    await db.commit()
+
+    logger.info("Password changed for user %s", user.id)
     return TokenResponse(access_token=_create_access_token(str(user.id)))
 
 
