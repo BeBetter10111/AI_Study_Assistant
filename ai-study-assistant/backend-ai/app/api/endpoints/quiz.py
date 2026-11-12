@@ -18,7 +18,10 @@ from app.rl import agent as rl_agent
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
 # Schemas
+# ---------------------------------------------------------------------------
+
 class QuizQuestion(BaseModel):
     question: str
     options: List[str] = Field(min_length=2, max_length=8)
@@ -35,6 +38,9 @@ class GenerateQuizRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     num_questions: int = Field(default=10, ge=1, le=50)
     document_id: Optional[str] = None
+    # difficulty có thể được client gợi ý, nhưng backend luôn ưu tiên
+    # giá trị đọc từ RL state. Trường này chỉ là fallback khi user chưa có
+    # lịch sử (mặc định "medium").
     difficulty: Optional[str] = Field(default=None, pattern=r"^(easy|medium|hard)$")
 
 
@@ -42,7 +48,7 @@ class GenerateQuizResponse(BaseModel):
     quiz_id: str
     topic: str
     questions: List[QuizQuestion]
-    difficulty: str  
+    difficulty: str  # độ khó đã được áp dụng — để frontend hiển thị
 
 
 class SubmitQuizRequest(BaseModel):
@@ -57,7 +63,9 @@ class SubmitQuizResponse(BaseModel):
     next_difficulty: str  # độ khó cho bài tiếp theo — frontend dùng để hiển thị
 
 
+# ---------------------------------------------------------------------------
 # Difficulty prompt fragments
+# ---------------------------------------------------------------------------
 
 _DIFFICULTY_INSTRUCTION: dict[str, str] = {
     "easy": (
@@ -76,7 +84,10 @@ _DIFFICULTY_INSTRUCTION: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
 # Endpoints
+# ---------------------------------------------------------------------------
+
 @router.post("/generate", response_model=GenerateQuizResponse)
 @limiter.limit("20/minute")
 async def generate_quiz(
@@ -177,6 +188,8 @@ async def submit_quiz_result(
             detail="quiz_id hoặc document_id không hợp lệ.",
         ) from exc
 
+    # document_id phải là tài liệu CỦA user này. Trước đây id lạ làm vi phạm khoá ngoại
+    # ở Postgres -> HTTP 500, và có thể gắn lượt làm bài vào tài liệu của người khác.
     if document_uuid is not None:
         owned = await db.execute(
             select(Document.id).where(

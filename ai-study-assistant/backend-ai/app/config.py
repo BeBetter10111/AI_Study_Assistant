@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     minio_bucket: str = "asa-documents"
 
     redis_url: str = "redis://redis:6379/0"
+    # Tự thêm cột/bảng còn thiếu vào Postgres khi backend khởi động (xem app/core/schema.py).
+    # Cần vì init_db.sql chỉ chạy khi volume Postgres còn trống.
+    auto_migrate_schema: bool = True
 
     llm_backend: str = "vllm"
     llm_model_name: str = "change-me"

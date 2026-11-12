@@ -15,7 +15,9 @@ from app.api.dependencies import get_db
 from app.api.endpoints import auth, chat, documents, quiz
 from app.api.security.rate_limiter import limiter
 from app.config import settings
+from app.core.database import engine
 from app.core.llm_engine import llm_engine
+from app.core.schema import ensure_schema
 from app.rag import vector_store as vs
 
 logger = logging.getLogger(__name__)
@@ -84,14 +86,16 @@ class UnhandledErrorMiddleware:
 
         try:
             await self.app(scope, receive, tracking_send)
-        except Exception:
+        except Exception as exc:
             if response_started:
                 raise  # header đã gửi đi, không thể đổi thành 500 nữa
             logger.exception(
                 "Unhandled error on %s %s", scope.get("method"), scope.get("path")
             )
+            # Nêu tên loại lỗi (không lộ nội dung/chi tiết) để chẩn đoán nhanh, ví dụ
+            # "(ProgrammingError)" gợi ý lệch schema DB; traceback đầy đủ nằm trong log backend.
             response = JSONResponse(
-                {"detail": "Internal server error. Check the backend logs."},
+                {"detail": f"Internal server error ({type(exc).__name__}). Check the backend logs."},
                 status_code=500,
             )
             await response(scope, receive, send)
@@ -99,6 +103,14 @@ class UnhandledErrorMiddleware:
 
 @asynccontextmanager
 async def lifespan(_app):
+    # Database tạo từ trước có thể thiếu cột/bảng mà code hiện tại cần (init_db.sql chỉ chạy khi
+    # volume còn trống) -> mọi truy vấn users nổ UndefinedColumnError, đăng ký/đăng nhập trả 500.
+    if settings.auto_migrate_schema:
+        try:
+            await ensure_schema(engine)
+        except Exception:
+            logger.exception("Automatic schema upgrade failed; the API may return 500 errors")
+
     def _warm():
         try:
             vs._get_embedding_model().encode("warmup")
@@ -142,6 +154,8 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
         headers=headers,
     )
 
+# Thứ tự quan trọng: add_middleware thêm lớp MỚI vào NGOÀI CÙNG, nên
+# UnhandledErrorMiddleware phải được thêm TRƯỚC CORS để nằm BÊN TRONG CORS.
 app.add_middleware(UnhandledErrorMiddleware)
 
 # CORS — explicit allow-list instead of wildcard "*".
