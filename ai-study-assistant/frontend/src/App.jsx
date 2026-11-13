@@ -18,6 +18,7 @@ import ResetPasswordPage from "./features/auth/ResetPasswordPage";
 import ProfilePage from "./features/profile/ProfilePage";
 import SettingsPage from "./features/settings/SettingsPage";
 import Sidebar from "./components/Sidebar";
+import ConfirmDialog from "./components/ConfirmDialog";
 import Icon from "./components/Icons";
 
 const UPLOAD_CONCURRENCY = 3;
@@ -62,6 +63,7 @@ export default function App() {
   const [loginNotice, setLoginNotice] = useState(null);
   const [view, setView] = useState(readView);
   const [navOpen, setNavOpen] = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
   const [profile, setProfile] = useState(null);
   const [documentId, setDocumentId] = useState(null);
   const [uploads, setUploads] = useState([]); 
@@ -151,6 +153,7 @@ export default function App() {
     setDocumentId(null);
     setUploads([]);
     setNavOpen(false);
+    setConfirmingLogout(false);
     goLogin();
   };
 
@@ -301,7 +304,7 @@ export default function App() {
         onFiles={handleFilesChange}
         profile={profile}
         fallbackName={userEmail}
-        onLogout={handleLogout}
+        onLogout={() => setConfirmingLogout(true)}
         onClose={() => setNavOpen(false)}
       />
       <div className="scrim" onClick={() => setNavOpen(false)} />
@@ -339,11 +342,22 @@ export default function App() {
             <SettingsPage
               profile={profile}
               onPasswordChanged={handlePasswordChanged}
-              onLogout={handleLogout}
+              onLogout={() => setConfirmingLogout(true)}
             />
           </main>
         )}
       </div>
+
+      {confirmingLogout && (
+        <ConfirmDialog
+          title="Đăng xuất?"
+          message="Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng. Các tài liệu đã tải lên trong phiên này sẽ không còn hiển thị ở thanh bên."
+          confirmLabel="Đăng xuất"
+          danger
+          onConfirm={handleLogout}
+          onCancel={() => setConfirmingLogout(false)}
+        />
+      )}
     </div>
   );
 }

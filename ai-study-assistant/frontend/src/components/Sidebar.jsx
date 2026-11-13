@@ -159,7 +159,12 @@ export default function Sidebar({
             <button type="button" role="menuitem" className="menu-item" onClick={() => go("settings")}>
               <Icon name="sliders" /> Cài đặt
             </button>
-            <button type="button" role="menuitem" className="menu-item" onClick={onLogout}>
+            <button type="button" role="menuitem" className="menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                onLogout();
+              }}
+            >
               <Icon name="logout" /> Đăng xuất
             </button>
           </div>
