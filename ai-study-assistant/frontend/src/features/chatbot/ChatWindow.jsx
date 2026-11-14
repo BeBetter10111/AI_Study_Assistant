@@ -11,6 +11,7 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
   const textareaRef = useRef(null);
   const scrollRef = useRef(null);
   const wasLoading = useRef(false);
+  const abortRef = useRef(null);
 
   // Ô nhập tự cao lên theo nội dung (tối đa ~6 dòng).
   useEffect(() => {
@@ -26,14 +27,30 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, steps, error]);
 
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   useEffect(() => {
     if (wasLoading.current && !isLoading) textareaRef.current?.focus();
     wasLoading.current = isLoading;
   }, [isLoading]);
 
+  // Lịch sử gửi kèm để server viết lại câu hỏi nối tiếp ("còn cái đó thì sao?") thành câu hỏi độc lập.
+  // Chỉ lấy các lượt đã hoàn chỉnh, tối đa 6 tin gần nhất.
+  const buildHistory = () =>
+    messages
+      .filter((m) => m.content && !m.partial)
+      .slice(-6)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+  const handleStop = () => abortRef.current?.abort();
+
   const handleSend = async () => {
     const question = input.trim();
     if (!question || isLoading) return;
+
+    const history = buildHistory();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const userMessage = { role: "user", content: question };
     setMessages((prev) => [...prev, userMessage]);
@@ -51,38 +68,60 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
       collected = i === -1 ? [...collected, step] : collected.map((s, j) => (j === i ? step : s));
       setSteps(collected);
     };
+    // Câu trả lời đang stream dở mà bị dừng / lỗi: giữ lại phần đã nhận và đánh dấu "chưa hoàn chỉnh".
+    const markPartial = () => {
+      if (!streamingStarted) return;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        return last?.role === "assistant" && !last.citations
+          ? [...prev.slice(0, -1), { ...last, partial: true }]
+          : prev;
+      });
+    };
 
     try {
-      await askQuestionStream(question, documentId, (event) => {
-        if (event.type === "step") {
-          upsertStep(event);
-        } else if (event.type === "token") {
-          if (!streamingStarted) {
-            streamingStarted = true;
-            setMessages((prev) => [...prev, { role: "assistant", content: event.text }]);
-          } else {
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              return [...prev.slice(0, -1), { ...last, content: last.content + event.text }];
-            });
+      await askQuestionStream(
+        question,
+        documentId,
+        (event) => {
+          if (event.type === "step") {
+            upsertStep(event);
+          } else if (event.type === "token") {
+            if (!streamingStarted) {
+              streamingStarted = true;
+              setMessages((prev) => [...prev, { role: "assistant", content: event.text }]);
+            } else {
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                return [...prev.slice(0, -1), { ...last, content: last.content + event.text }];
+              });
+            }
+          } else if (event.type === "result") {
+            answered = true;
+            const { answer, citations, intent, cached } = event.data;
+            const finalMsg = { role: "assistant", content: answer, citations, intent, cached, steps: collected };
+            const wasStreaming = streamingStarted;
+            setMessages((prev) => (wasStreaming ? [...prev.slice(0, -1), finalMsg] : [...prev, finalMsg]));
+          } else if (event.type === "error") {
+            failed = true;
+            markPartial();
+            setError(event.detail);
           }
-        } else if (event.type === "result") {
-          answered = true;
-          const { answer, citations, intent } = event.data;
-          const finalMsg = { role: "assistant", content: answer, citations, intent, steps: collected };
-          const wasStreaming = streamingStarted;
-          setMessages((prev) => (wasStreaming ? [...prev.slice(0, -1), finalMsg] : [...prev, finalMsg]));
-        } else if (event.type === "error") {
-          failed = true;
-          setError(event.detail);
-        }
-      });
+        },
+        { history, signal: controller.signal }
+      );
       if (!answered && !failed) {
+        markPartial();
         setError("Trợ lý không trả về câu trả lời. Vui lòng thử lại.");
       }
     } catch (err) {
-      setError(err.message || "An error occurred while connecting to the AI assistant.");
+      markPartial();
+      // Người dùng bấm "Dừng": không phải lỗi, chỉ giữ phần đã nhận.
+      if (err?.name !== "AbortError") {
+        setError(err.message || "An error occurred while connecting to the AI assistant.");
+      }
     } finally {
+      abortRef.current = null;
       setIsLoading(false);
       setSteps([]);
     }
@@ -119,6 +158,10 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
               ) : (
                 <div key={index}>
                   <div className="msg-ai">{message.content}</div>
+                  {message.partial && <p className="msg-extra">Câu trả lời chưa hoàn chỉnh (đã dừng hoặc bị gián đoạn).</p>}
+                  {message.cached && (
+                    <p className="msg-extra">Trả lời từ một câu hỏi tương tự đã hỏi trước đó.</p>
+                  )}
                   {message.steps && message.steps.length > 0 && (
                     <details className="msg-extra">
                       <summary>Xem các bước xử lý</summary>
@@ -178,15 +221,21 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
             <span className="scope" title={scopeLabel}>
               {scopeLabel}
             </span>
-            <button
-              type="button"
-              className="send"
-              onClick={handleSend}
-              disabled={isLoading || !input.trim()}
-              aria-label="Gửi câu hỏi"
-            >
-              <Icon name="send" size={17} />
-            </button>
+            {isLoading ? (
+              <button type="button" className="send" onClick={handleStop} aria-label="Dừng trả lời" title="Dừng">
+                <Icon name="stop" size={17} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="send"
+                onClick={handleSend}
+                disabled={!input.trim()}
+                aria-label="Gửi câu hỏi"
+              >
+                <Icon name="send" size={17} />
+              </button>
+            )}
           </div>
         </div>
       </div>

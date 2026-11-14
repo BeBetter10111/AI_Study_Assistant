@@ -27,3 +27,5 @@ data/
 
 # RAGAS reports
 eval_results/
+
+backend-ai/models/

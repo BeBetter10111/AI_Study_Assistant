@@ -1,9 +1,3 @@
-"""Celery worker tasks — document ingestion pipeline.
-
-Uses the new structured ingestion path (extract_and_chunk) so that each chunk
-carries rich metadata (page number, slide number/title, section heading) that
-the vector store persists for precise citations.
-"""
 import logging
 import os
 import tempfile
@@ -15,6 +9,7 @@ from app.config import settings
 from app.core.database import minio_client
 from app.models.models import Document
 from app.rag import ingestion
+from app.rag.semantic_cache import invalidate_owner_sync
 from app.rag.vector_store import vector_store
 from app.worker.celery_app import celery_app
 
@@ -61,6 +56,8 @@ def task_process_document(self, document_id: str, storage_path: str, mime_type: 
 
         # Pass owner_id so every Qdrant point carries the owner for access-control filtering.
         vector_store.upsert_chunks(chunks, document_id, owner_id=owner_id or None)
+
+        invalidate_owner_sync(owner_id)
         _update_document_status(document_id, "embedded")
         logger.info(
             f"Document {document_id} processed successfully: {len(chunks)} chunks "

@@ -12,9 +12,6 @@ export const setAuthToken = (token) => {
   }
 };
 
-// Gọi khi một request ĐÃ ĐĂNG NHẬP nhận 401: token hết hạn, hoặc bị vô hiệu hoá sau khi đổi
-// mật khẩu. App đăng ký handler để đưa người dùng về màn hình đăng nhập thay vì để họ kẹt
-// với những request lỗi liên tục.
 let unauthorizedHandler = null;
 export const setUnauthorizedHandler = (handler) => {
   unauthorizedHandler = handler;
@@ -28,7 +25,6 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const url = error?.config?.url || "";
-    // 401 của chính các endpoint /auth/* (sai mật khẩu...) là lỗi nhập liệu bình thường.
     if (error?.response?.status === 401 && !url.startsWith("/auth/")) notifyUnauthorized();
     return Promise.reject(error);
   }
@@ -60,7 +56,6 @@ export const registerUser = (data) =>
 export const loginUser = (identifier, password) =>
   api.post("/auth/login", { identifier, password });
 
-// Quên mật khẩu: email -> mã UUID trong email -> mật khẩu mới
 export const forgotPassword = (email) =>
   api.post("/auth/forgot-password", { email });
 
@@ -74,7 +69,6 @@ export const resetPassword = (resetToken, newPassword, confirmPassword) =>
     confirm_password: confirmPassword,
   });
 
-// Hồ sơ cá nhân và đổi mật khẩu (cần đăng nhập). Đổi mật khẩu trả về token mới vì token cũ bị thu hồi.
 export const getMe = () => api.get("/auth/me");
 
 export const updateProfile = (data) => api.patch("/auth/me", data);
@@ -115,16 +109,39 @@ export const submitQuizResult = (quizId, result) =>
 // Streams the RAG pipeline as Server-Sent Events so the UI can show each real
 // step ("Searching your document", ...). axios cannot stream in the browser,
 // so this uses fetch. Calls onEvent({type: "step"|"result"|"error", ...}).
-export const askQuestionStream = async (question, documentId, onEvent, topK = 4) => {
+const parseSseFrame = (frame) => {
+  const data = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+    .join("\n");
+  if (!data) return null;
+  try {
+    return JSON.parse(data);
+  } catch {
+    console.warn("Ignoring malformed SSE frame:", data.slice(0, 120));
+    return null;
+  }
+};
+
+// options: { topK, history: [{role, content}], signal: AbortSignal }
+// Truyền `signal` để huỷ giữa chừng (nút "Dừng"): server thấy kết nối đóng và dừng sinh câu trả lời.
+export const askQuestionStream = async (
+  question,
+  documentId,
+  onEvent,
+  { topK = 4, history = [], signal } = {}
+) => {
   const response = await fetch(`${api.defaults.baseURL || ""}/chat/query/stream`, {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
       ...(api.defaults.headers.common.Authorization
         ? { Authorization: api.defaults.headers.common.Authorization }
         : {}),
     },
-    body: JSON.stringify({ question, document_id: documentId, top_k: topK }),
+    body: JSON.stringify({ question, document_id: documentId, top_k: topK, history }),
   });
 
   if (response.status === 401) notifyUnauthorized();
@@ -133,7 +150,7 @@ export const askQuestionStream = async (question, documentId, onEvent, topK = 4)
     try {
       detail = formatDetail((await response.json()).detail) || detail;
     } catch {
-      /* non-JSON error body */
+
     }
     throw new Error(detail);
   }
@@ -141,15 +158,20 @@ export const askQuestionStream = async (question, documentId, onEvent, topK = 4)
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const flush = (frames) => {
+    for (const frame of frames) {
+      const event = parseSseFrame(frame);
+      if (event) onEvent(event);
+    }
+  };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
     const frames = buffer.split("\n\n");
     buffer = frames.pop();
-    for (const frame of frames) {
-      const line = frame.split("\n").find((l) => l.startsWith("data:"));
-      if (line) onEvent(JSON.parse(line.slice(5).trim()));
-    }
+    flush(frames);
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) flush([buffer]); // frame cuối không có dòng trống kết thúc
 };

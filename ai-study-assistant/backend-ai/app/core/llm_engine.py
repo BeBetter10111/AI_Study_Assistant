@@ -14,6 +14,14 @@ SUPPORTED_BACKENDS = ("vllm", "ollama")
 OLLAMA_STRUCTURED_MAX_TOKENS = 4096
 
 
+class LLMUnavailableError(RuntimeError):
+    """LLM không trả lời được; ``str(exc)`` là thông báo thân thiện cho người dùng.
+
+    Tách riêng với ``generate_rag_response`` (vốn trả lỗi dưới dạng chuỗi để API cũ không đổi) để
+    những nơi cần biết "đây có phải câu trả lời thật không" — như semantic cache — phân biệt được.
+    """
+
+
 class LLMEngineManager:
     """
     Quản lý mô hình LLM chính, có 2 backend chọn bằng LLM_BACKEND:
@@ -112,9 +120,22 @@ class LLMEngineManager:
         return response.json()["message"]["content"]
 
     def stream_rag_response(self, prompt, system_prompt, temperature=0.2, max_tokens=512):
-        """Yield {"token": str} continuously, ending with {"done": True, ...statistics}."""
+        """Yield ``{"token": str}`` liên tục, kết thúc bằng ``{"done": True, ...}``.
+
+        Lỗi xảy ra TRƯỚC khi có token nào được yield thành ``{"error": "<thông báo>"}`` (kèm return) để
+        tầng trên báo lỗi đúng nghĩa thay vì coi thông báo lỗi là câu trả lời. Lỗi giữa chừng (đã stream
+        dở) được ném lại.
+
+        Generator này giữ kết nối HTTP tới Ollama; hãy ``close()`` nó khi dừng sớm (xem
+        ``app.core.streaming.aiter_blocking``) để Ollama ngừng sinh.
+        """
         if self.backend != "ollama":
-            yield {"token": self.generate_rag_response(prompt, system_prompt, temperature, max_tokens)}
+            try:
+                text = self.generate_rag_response_strict(prompt, system_prompt, temperature, max_tokens)
+            except LLMUnavailableError as exc:
+                yield {"error": str(exc)}
+                return
+            yield {"token": text}
             yield {"done": True}
             return
 
@@ -134,30 +155,33 @@ class LLMEngineManager:
         }
         produced_any = False
         try:
-            with httpx.stream("POST", f"{self.ollama_base_url}/api/chat", json=payload, timeout=settings.ollama_timeout_s) as r:
+            with httpx.stream("POST", f"{self.ollama_base_url}/api/chat", json=payload,
+                              timeout=settings.ollama_timeout_s) as r:
                 r.raise_for_status()
                 for line in r.iter_lines():
                     if not line:
                         continue
                     data = json.loads(line)
+                    if data.get("error"):  # Ollama báo lỗi ngay trong luồng (HTTP vẫn 200)
+                        if produced_any:
+                            raise RuntimeError(f"Ollama error: {data['error']}")
+                        yield {"error": f"Ollama error: {data['error']}"}
+                        return
                     if data.get("done"):
                         yield {"done": True,
-                            "eval_count": data.get("eval_count"),
-                            "eval_duration": data.get("eval_duration"),
-                            "prompt_eval_duration": data.get("prompt_eval_duration")}
+                               "eval_count": data.get("eval_count"),
+                               "eval_duration": data.get("eval_duration"),
+                               "prompt_eval_duration": data.get("prompt_eval_duration")}
                         return
                     token = data.get("message", {}).get("content", "")
                     if token:
                         produced_any = True
                         yield {"token": token}
         except Exception as exc:
-            # Cùng cách xử lý với generate_rag_response: lỗi kết nối/timeout/thiếu model
-            # được đổi thành thông báo thân thiện thay vì "Something went wrong: <exception thô>".
             if produced_any:
                 raise  # đã stream dở câu trả lời -> để tầng trên báo lỗi
             logger.error(f"Error with Ollama when streaming RAG response: {str(exc)}")
-            yield {"token": self._ollama_error_message(exc)}
-            yield {"done": True}
+            yield {"error": self._ollama_error_message(exc)}
 
     def _ollama_error_message(self, exc: Exception) -> str:
         if isinstance(exc, httpx.ConnectError):
@@ -172,12 +196,26 @@ class LLMEngineManager:
         return "An error occurred during model inference."
 
     def generate_rag_response(
-        self, 
-        prompt: str, 
-        system_prompt: str, 
-        temperature: float = 0.2, 
+        self,
+        prompt: str,
+        system_prompt: str,
+        temperature: float = 0.2,
         max_tokens: int = 512
     ) -> str:
+        """Như ``generate_rag_response_strict`` nhưng lỗi được trả về dưới dạng chuỗi thân thiện."""
+        try:
+            return self.generate_rag_response_strict(prompt, system_prompt, temperature, max_tokens)
+        except LLMUnavailableError as exc:
+            return str(exc)
+
+    def generate_rag_response_strict(
+        self,
+        prompt: str,
+        system_prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 512
+    ) -> str:
+        """Sinh câu trả lời; ném ``LLMUnavailableError`` (có thông báo thân thiện) nếu thất bại."""
         if self.backend == "ollama":
             try:
                 messages = [
@@ -187,14 +225,14 @@ class LLMEngineManager:
                 return self._ollama_chat(messages, temperature, max_tokens=max_tokens).strip()
             except Exception as e:
                 logger.error(f"Error with Ollama when generating RAG response: {str(e)}")
-                return self._ollama_error_message(e)
+                raise LLMUnavailableError(self._ollama_error_message(e)) from e
 
         if not self.llm:
-            return "AI Engine is not ready (Missing GPU/vLLM)."
+            raise LLMUnavailableError("AI Engine is not ready (Missing GPU/vLLM).")
 
         try:
             full_prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
-            
+
             sampling_params = self._sampling_params_cls(
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -202,13 +240,11 @@ class LLMEngineManager:
             )
 
             outputs = self.llm.generate([full_prompt], sampling_params)
-            response_text = outputs[0].outputs[0].text.strip()
-            
-            return response_text
+            return outputs[0].outputs[0].text.strip()
 
         except Exception as e:
             logger.error(f"Error generating RAG response: {str(e)}")
-            return "An error occurred during model inference."
+            raise LLMUnavailableError("An error occurred during model inference.") from e
 
     def generate_structured_output(
         self, 

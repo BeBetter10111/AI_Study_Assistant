@@ -2,15 +2,16 @@
 
 Pipeline of ``search_similar_chunks``
 -------------------------------------
-1. **Dense leg**  — multilingual mpnet embedding, cosine search in Qdrant.
+1. **Dense leg**  — multilingual mpnet embedding (ONNX INT8 nếu đã lượng tử hóa, ngược lại
+   PyTorch), cosine search in Qdrant.
 2. **Sparse leg** — BM25 term weights stored as a Qdrant sparse vector (IDF is
    computed by Qdrant over the whole collection), searched *independently*
    so exact keywords / course codes / function names are retrieved even when
    the dense model misses them.  Both legs run in one ``query_batch_points``
    round-trip and share the same ``document_id`` filter.
 3. **Fusion**     — weighted Reciprocal Rank Fusion (``alpha`` = dense weight).
-4. **Re-ranking** — multilingual cross-encoder on the top candidates; its score
-   is *blended* with the fusion score (not a hard override).
+4. **Re-ranking** — multilingual cross-encoder (ONNX INT8 hoặc PyTorch) on the top candidates;
+   its score is *blended* with the fusion score (not a hard override).
 5. **Clean-up**   — drop summary chunks that duplicate a returned detail chunk.
 
 Schema (breaking change)
@@ -22,8 +23,12 @@ re-uploaded (``scripts/bulk_upload.py``).
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 from app.config import settings
 from app.rag import hybrid
@@ -38,40 +43,120 @@ SPARSE_NAME = "bm25"
 _embedding_model = None
 _reranker = None
 _reranker_failed = False
+# "onnx-int8" | "onnx-fp32" | "torch" — cho log và cho khóa semantic cache.
+_embedding_backend = "unloaded"
+_reranker_backend = "unloaded"
+
+_load_lock = threading.Lock()
+_query_cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
+_query_cache_lock = threading.Lock()
 
 
 class CollectionSchemaError(RuntimeError):
     """The Qdrant collection does not match what this code version expects."""
 
 
-def _get_embedding_model():
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        logger.info("Loading multilingual embedding model …")
-        _embedding_model = SentenceTransformer(
-            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+def _try_onnx(model_name: str, kind: str):
+    """Tải bản ONNX đã lượng tử hóa nếu có; trả None để caller dùng PyTorch."""
+    if not settings.rag_onnx_enabled:
+        return None
+    from app.rag import onnx_models
+
+    precision = settings.rag_onnx_precision.strip().lower()
+    if precision not in ("int8", "fp32"):
+        logger.warning(f"RAG_ONNX_PRECISION='{precision}' is invalid (use int8 or fp32) — using PyTorch.")
+        return None
+    directory = onnx_models.find_model_dir(settings.rag_onnx_dir, model_name, precision)
+    if directory is None:
+        logger.info(
+            f"No ONNX {precision} {kind} for {model_name} under '{settings.rag_onnx_dir}' — using PyTorch. "
+            f"Create it with: python -m scripts.quantize_models"
         )
-        logger.info("Embedding model ready.")
+        return None
+    try:
+        cls = onnx_models.OnnxEmbedder if kind == "embedding" else onnx_models.OnnxCrossEncoder
+        return cls(directory, precision=precision, threads=settings.rag_onnx_threads)
+    except Exception as exc:  # file hỏng / thiếu onnxruntime / tokenizer thiếu ...
+        logger.warning(f"Could not load ONNX {kind} from {directory} — using PyTorch: {exc}")
+        return None
+
+
+def _get_embedding_model():
+    global _embedding_model, _embedding_backend
+    if _embedding_model is None:
+        with _load_lock:
+            if _embedding_model is None:
+                name = settings.rag_embedding_model
+                model = _try_onnx(name, "embedding")
+                if model is not None:
+                    _embedding_backend = f"onnx-{model.precision}"
+                else:
+                    from sentence_transformers import SentenceTransformer
+                    logger.info("Loading multilingual embedding model (PyTorch) …")
+                    model = SentenceTransformer(name)
+                    _embedding_backend = "torch"
+                _embedding_model = model
+                logger.info(f"Embedding model ready — backend: {_embedding_backend}.")
     return _embedding_model
 
 
 def _get_reranker():
     """Return the cross-encoder, or None if disabled / unavailable."""
-    global _reranker, _reranker_failed
+    global _reranker, _reranker_failed, _reranker_backend
     if not settings.rag_rerank_enabled or _reranker_failed:
         return None
     if _reranker is None:
-        try:
-            from sentence_transformers import CrossEncoder
-            logger.info(f"Loading cross-encoder re-ranker {settings.rag_reranker_model} …")
-            _reranker = CrossEncoder(settings.rag_reranker_model, max_length=512)
-            logger.info("Re-ranker ready.")
-        except Exception as exc:
-            logger.warning(f"Could not load re-ranker — falling back to fusion-only ranking: {exc}")
-            _reranker_failed = True
-            return None
+        with _load_lock:
+            if _reranker is None and not _reranker_failed:
+                name = settings.rag_reranker_model
+                model = _try_onnx(name, "reranker")
+                if model is not None:
+                    _reranker_backend = f"onnx-{model.precision}"
+                else:
+                    try:
+                        from sentence_transformers import CrossEncoder
+                        logger.info(f"Loading cross-encoder re-ranker {name} (PyTorch) …")
+                        model = CrossEncoder(name, max_length=512)
+                        _reranker_backend = "torch"
+                    except Exception as exc:
+                        logger.warning(
+                            f"Could not load re-ranker — falling back to fusion-only ranking: {exc}"
+                        )
+                        _reranker_failed = True
+                        return None
+                _reranker = model
+                logger.info(f"Re-ranker ready — backend: {_reranker_backend}.")
     return _reranker
+
+
+def model_fingerprint() -> str:
+    """Định danh cấu hình model đang chạy — đổi model/backend thì cache ngữ nghĩa tự vô hiệu."""
+    _get_embedding_model()
+    rerank = _reranker_backend if _get_reranker() is not None else "off"
+    return f"{settings.rag_embedding_model}@{_embedding_backend}|{settings.rag_reranker_model}@{rerank}"
+
+
+def embed_query(text: str) -> np.ndarray:
+    """Embedding của MỘT câu truy vấn, có LRU cache.
+
+    Dùng chung cho tìm kiếm dense và semantic cache nên mỗi câu hỏi chỉ phải embed một lần.
+    Trả về bản sao (caller được phép sửa).
+    """
+    size = max(0, settings.rag_query_embed_cache_size)
+    if size:
+        with _query_cache_lock:
+            hit = _query_cache.get(text)
+            if hit is not None:
+                _query_cache.move_to_end(text)
+                return hit.copy()
+    vector = np.asarray(_get_embedding_model().encode(text), dtype=np.float32)
+    if size:
+        with _query_cache_lock:
+            _query_cache[text] = vector
+            _query_cache.move_to_end(text)
+            while len(_query_cache) > size:
+                _query_cache.popitem(last=False)
+    return vector.copy()
 
 
 def _sparse_text(content: str, title: Optional[str]) -> str:
@@ -313,7 +398,7 @@ class VectorStoreManager:
 
             requests = []
             if alpha > 0:
-                dense_vec = _get_embedding_model().encode(query).tolist()
+                dense_vec = embed_query(query).tolist()
                 requests.append(("dense", qdrant_models.QueryRequest(
                     query=dense_vec, using=DENSE_NAME, filter=query_filter,
                     limit=fetch_k, with_payload=True,

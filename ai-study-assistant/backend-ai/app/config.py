@@ -12,8 +12,6 @@ class Settings(BaseSettings):
     minio_bucket: str = "asa-documents"
 
     redis_url: str = "redis://redis:6379/0"
-    # Tự thêm cột/bảng còn thiếu vào Postgres khi backend khởi động (xem app/core/schema.py).
-    # Cần vì init_db.sql chỉ chạy khi volume Postgres còn trống.
     auto_migrate_schema: bool = True
 
     llm_backend: str = "vllm"
@@ -65,15 +63,31 @@ class Settings(BaseSettings):
     # Final score = w * rerank + (1 - w) * fusion (both min-max normalised).
     rag_rerank_weight: float = 0.7
 
-    # CORS — comma-separated list of allowed frontend origins.
-    # Default allows the local Vite dev server.
-    # In production set to your actual domain, e.g.:
-    #   ALLOWED_ORIGINS=https://app.example.com
-    # NEVER leave this as "*" in production — it allows any website to make
-    # credentialed (JWT-bearing) requests to your API on behalf of your users.
+    # --- Mô hình embedding / re-ranker: ONNX Runtime INT8 
+    # Tên model gốc (HuggingFace). Đổi embedding model => phải re-ingest tài liệu.
+    rag_embedding_model: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    # Dùng bản ONNX đã lượng tử hóa nếu có file (tạo bằng `python -m scripts.quantize_models`).
+    # Không có file / lỗi tải => TỰ ĐỘNG quay về PyTorch (hành vi cũ), không làm hỏng API.
+    rag_onnx_enabled: bool = True
+    rag_onnx_dir: str = "models/onnx"         # tương đối so với /app; nằm trong volume ./backend-ai
+    rag_onnx_precision: str = "int8"          # "int8" (nhanh, nhẹ) hoặc "fp32" (ONNX không lượng tử hóa)
+    rag_onnx_threads: int = 0                 # 0 = để ONNX Runtime tự chọn theo số lõi CPU
+    # Cache LRU cho embedding của câu truy vấn (cùng câu hỏi => khỏi tính lại).
+    rag_query_embed_cache_size: int = 256
+
+    # --- Redis semantic cache
+    semantic_cache_enabled: bool = True
+    # Ngưỡng cosine giữa 2 câu hỏi để coi là "cùng một câu hỏi". Cao = an toàn hơn (ít trúng sai).
+    semantic_cache_threshold: float = 0.92
+    semantic_cache_ttl_s: int = 24 * 3600
+    semantic_cache_max_entries: int = 200     # tối đa mỗi phạm vi (user + tài liệu + intent + top_k)
+    semantic_cache_timeout_s: float = 0.5     # Redis chậm/chết => bỏ qua cache, KHÔNG làm chậm chat
+    # Heartbeat SSE (giây) khi chờ token đầu tiên, tránh proxy cắt kết nối "im lặng".
+    sse_heartbeat_s: float = 15.0
+
     allowed_origins: str = "http://localhost:5173"
 
-    # RAGAS evaluation (python -m app.rag.evaluation) — never used by the API itself.
+    # RAGAS evaluation 
     # Judge LLM: "ollama" (default, reuses OLLAMA_BASE_URL) or "openai" (any
     # OpenAI-compatible server: vLLM, OpenAI, ...).  A judge stronger than the
     # model being evaluated gives far more trustworthy scores.

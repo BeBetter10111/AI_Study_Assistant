@@ -41,6 +41,10 @@ tiktoken==0.7.0
 torch==2.4.0
 transformers==4.45.1
 sentence-transformers==3.1.1
+# ONNX Runtime: chạy embedding + re-ranker đã lượng tử hóa INT8 trên CPU (app/rag/onnx_models.py).
+# `onnx` chỉ cần cho script xuất/lượng tử hóa: python -m scripts.quantize_models.
+onnxruntime==1.20.1
+onnx==1.17.0
 # vllm==0.6.2
 # outlines==0.0.46
 # pyairports==0.0.1
@@ -53,7 +57,6 @@ requests==2.31.0
 # slowapi is a thin Starlette/FastAPI wrapper around the limits library.
 slowapi==0.1.9
 
-# RAGAS — tự động tính metrics RAG (app/rag/evaluation.py). Chỉ dùng khi chạy
-# `python -m app.rag.evaluation`, không nằm trong luồng API.
+# RAGAS
 ragas==0.2.15
 langchain-openai==0.3.19

@@ -13,6 +13,7 @@ const PATHS = {
   close: "M6 6l12 12M18 6L6 18",
   updown: "M8 9l4-4 4 4M8 15l4 4 4-4",
   send: "M12 19V5M5 12l7-7 7 7",
+  stop: "M8 8h8v8H8z",
   mail: "M4 6h16v12H4zM4 7l8 6 8-6",
   lock: "M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3",
   alert: "M12 8v5M12 16.5v.5M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
