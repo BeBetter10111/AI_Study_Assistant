@@ -1,17 +1,17 @@
 name: CI
 
-# Lưu ý: "runs-on: ubuntu-latest" là hệ điều hành của MÁY ẢO CHẠY CI trên
-# server GitHub (cloud runner) — không liên quan gì đến máy local của bạn.
-# Dù bạn code trên Windows, workflow này vẫn chạy đúng, vì nó không hề
-# chạy trên máy bạn; GitHub tự cấp một VM Ubuntu tạm thời cho mỗi lần chạy.
+# Note: "runs-on: ubuntu-latest" is the OS of the CI virtual machine on
+# GitHub's server (cloud runner) — it has nothing to do with your local machine.
+# Even if you develop on Windows, this workflow still works because it does not
+# run on your machine; GitHub provides a temporary Ubuntu VM for each run.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-  # cd.yml gọi workflow này bằng `uses: ./.github/workflows/ci.yml`. Thiếu trigger này, GitHub
-  # báo lỗi "workflow is not reusable" và cả pipeline CD không chạy được.
+  # cd.yml calls this workflow with `uses: ./.github/workflows/ci.yml`. Without this trigger, GitHub
+  # reports "workflow is not reusable" and the CD pipeline cannot run.
   workflow_call:
 
 jobs:
@@ -57,16 +57,16 @@ jobs:
           cache-dependency-path: backend-ai/requirements-ci.txt
 
       - name: Install dependencies
-        # Cố tình KHÔNG cài requirements.txt đầy đủ ở đây: torch/vllm/
-        # sentence-transformers cần GPU và hàng GB dung lượng, không khả thi
-        # trên GitHub-hosted runner. requirements-ci.txt là bộ dependency nhẹ
-        # dùng riêng cho lint/test — xem chú thích trong tests/conftest.py.
+        # Intentionally do NOT install the full requirements.txt here: torch/vllm/
+        # sentence-transformers require a GPU and several gigabytes of storage, which is impractical
+        # on GitHub-hosted runners. requirements-ci.txt is the lightweight dependency set
+        # for lint/tests — see the comments in tests/conftest.py.
         run: pip install -r requirements-ci.txt
 
       - name: Install tesseract-ocr (cho tests/test_ingestion_ocr.py)
-        # Nhẹ, không cần GPU — cài thật để test OCR chạy với binary thật
-        # thay vì mock, vì đây đúng là phần dễ âm thầm hỏng nhất (đổi
-        # ngưỡng, đổi API pytesseract, quên cài binary ở production).
+        # Lightweight and requires no GPU — install it for real so OCR tests use the actual binary
+        # instead of a mock; this is the part most likely to fail silently (threshold changes,
+        # pytesseract API changes, or forgetting to install the binary in production).
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-vie
 
       - name: Lint (ruff)

@@ -1,9 +1,9 @@
--- Chạy MỘT LẦN trên database đã tồn tại (init_db.sql chỉ chạy khi volume Postgres còn trống).
+-- Run ONCE on an existing database (init_db.sql only runs when the Postgres volume is empty).
 --   docker compose exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB < backend-ai/scripts/migrations/001_password_reset.sql
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
 
--- Bảng cũ chưa được code nào sử dụng (cột token VARCHAR(36) không đủ chỗ cho hash) -> tạo lại.
+-- The old table is unused by the application (its token VARCHAR(36) column cannot hold a hash) -> recreate it.
 DROP TABLE IF EXISTS password_reset_tokens;
 CREATE TABLE password_reset_tokens (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),

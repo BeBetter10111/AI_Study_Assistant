@@ -56,7 +56,7 @@ class LLMEngineManager:
 
         self.tensor_parallel_size = settings.llm_tensor_parallel_size
 
-        # Tỷ lệ giới hạn VRAM sử dụng (0.85 = 85% VRAM mỗi GPU để tránh OOM)
+        # VRAM usage limit (0.85 = 85% of each GPU's VRAM to avoid OOM)
         self.gpu_memory_utilization = settings.gpu_memory_utilization
 
         self._init_engine()
@@ -162,7 +162,7 @@ class LLMEngineManager:
                     if not line:
                         continue
                     data = json.loads(line)
-                    if data.get("error"):  # Ollama báo lỗi ngay trong luồng (HTTP vẫn 200)
+                    if data.get("error"):  # Ollama reports an error in the stream (HTTP status is still 200).
                         if produced_any:
                             raise RuntimeError(f"Ollama error: {data['error']}")
                         yield {"error": f"Ollama error: {data['error']}"}
@@ -179,7 +179,7 @@ class LLMEngineManager:
                         yield {"token": token}
         except Exception as exc:
             if produced_any:
-                raise  # đã stream dở câu trả lời -> để tầng trên báo lỗi
+                raise  # The answer stream has already started -> let the caller report the error.
             logger.error(f"Error with Ollama when streaming RAG response: {str(exc)}")
             yield {"error": self._ollama_error_message(exc)}
 
@@ -302,5 +302,5 @@ class LLMEngineManager:
             raise e
 
 
-# Singleton Instance để dùng chung toàn bộ ứng dụng
+# Singleton instance shared across the application
 llm_engine = LLMEngineManager()

@@ -57,7 +57,7 @@ async def load_state(user_id: str, db: AsyncSession) -> dict[str, Any]:
 
 async def save_state(user_id: str, state: dict[str, Any], db: AsyncSession) -> None:
     """Ghi state vào Redis và PostgreSQL."""
-    # Trim lịch sử trước khi lưu
+    # Trim the history before saving
     history = state.get("reward_history", [])
     if len(history) > _MAX_HISTORY:
         state = {**state, "reward_history": history[-_MAX_HISTORY:]}

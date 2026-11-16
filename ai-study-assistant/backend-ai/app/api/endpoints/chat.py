@@ -14,6 +14,7 @@ from app.api.dependencies import get_current_user
 from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core import conversation_store
+from app.core.concurrency import LLM_BUSY, USER_BUSY, gate, llm_slot, too_busy, user_request
 from app.core.llm_engine import llm_engine
 from app.core.streaming import HEARTBEAT, SSE_KEEPALIVE, Done, aiter_blocking, run_with_heartbeat
 from app.models.models import User
@@ -85,7 +86,7 @@ class QueryRequest(BaseModel):
     document_id: Optional[str] = None
     top_k: int = Field(default=3, ge=1, le=20)
     history: List[HistoryMessage] = Field(default_factory=list, max_length=20)
-    # Khi có: lịch sử lấy từ DB (đáng tin hơn `history` do client gửi) và tin nhắn được lưu lại.
+    # When provided, history is loaded from the DB (more trustworthy than client-supplied `history`) and messages are saved.
     conversation_id: Optional[str] = None
 
 
@@ -107,15 +108,15 @@ class QueryResponse(BaseModel):
     citations: List[Citation]
     standalone_query: str  
     latency_ms: float
-    cached: bool = False  # True: lấy từ semantic cache (câu hỏi tương tự đã được trả lời)
+    cached: bool = False  # True: served from the semantic cache (a similar question was already answered).
 
 def _is_identity_question(question: str) -> bool:
     lowered = question.lower().strip()
     return len(lowered) <= 80 and any(kw in lowered for kw in IDENTITY_KEYWORDS)
 
 def _identity_answer(question: str) -> str:
-    # IDENTITY_SYSTEM đã là một câu trả lời hoàn chỉnh; trước đây còn nối thêm một đoạn
-    # lặp lại y hệt nội dung nên người dùng thấy câu trả lời bị nhân đôi.
+    # IDENTITY_SYSTEM is already a complete answer; previously, an identical paragraph was appended,
+    # causing users to see the answer twice.
     return IDENTITY_SYSTEM
 
 # Intent classification
@@ -159,14 +160,14 @@ def _rewrite_query(question: str, history: List[HistoryMessage]) -> str:
 
     # Simple heuristic: if the question has no pronouns / vague references,
     # it is likely already standalone.
-    # Khớp theo TỪ NGUYÊN VẸN. Trước đây dùng `tok in lowered` (so khớp chuỗi con) nên
-    # "it" khớp "with"/"write", "he" khớp "the"... -> luôn gọi LLM để rewrite dù không cần.
+    # Match WHOLE WORDS. Previously, `tok in lowered` (substring matching) meant
+    # "it" matched "with"/"write", "he" matched "the", etc. -> the LLM was always called to rewrite unnecessarily.
     if not _VAGUE_REFERENCE_RE.search(question):
         return question
 
     # Build a short history string (last 6 turns max to keep prompt short)
     recent = history[-6:]
-    # Câu trả lời cũ có thể rất dài; chỉ cần đủ ngữ cảnh để hiểu đại từ => cắt bớt cho prompt nhỏ, rewrite nhanh.
+    # The previous answer can be very long; keep only enough context to resolve pronouns -> smaller prompt and faster rewrite.
     def _short(text: str, limit: int = 600) -> str:
         return text if len(text) <= limit else text[:limit].rstrip() + "…"
 
@@ -281,6 +282,12 @@ def _build_citations(hits: List[Dict[str, Any]]) -> List[Citation]:
 @router.post("/query", response_model=QueryResponse)
 @limiter.limit("30/minute")
 async def query(request: Request, payload: QueryRequest, current_user: User = Depends(get_current_user)):
+    # Limit the number of concurrent Q&A requests per user (see app/core/concurrency.py).
+    with user_request(str(current_user.id)):
+        return await _query(payload, current_user)
+
+
+async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
     question = payload.question.strip()
     if not question:
         raise HTTPException(
@@ -319,9 +326,9 @@ async def query(request: Request, payload: QueryRequest, current_user: User = De
 
     # 2. Hybrid (dense + BM25) search scoped to the calling user's documents.
     #    owner_id ensures a user can never read chunks belonging to another user.
-    #    Chạy trong threadpool: embedding + Qdrant + re-ranker là code đồng bộ/nặng CPU;
-    #    gọi thẳng trong `async def` sẽ chặn cả event loop (mọi request khác, kể cả đăng nhập
-    #    và /health, bị đứng trong lúc truy vấn).
+    #    Run in a thread pool: embedding + Qdrant + re-ranker are synchronous/CPU-intensive;
+    #    calling them directly in `async def` would block the event loop (all other requests, including login
+    #    and /health, would stall while the query runs).
     hits = await run_in_threadpool(
         vector_store.search_similar_chunks,
         query=standalone_query,
@@ -345,11 +352,12 @@ async def query(request: Request, payload: QueryRequest, current_user: User = De
 
     system_prompt, user_prompt = _build_prompts(intent, hits, standalone_query)
 
-    answer = await run_in_threadpool(
-        llm_engine.generate_rag_response,
-        prompt=user_prompt,
-        system_prompt=system_prompt,
-    )
+    with llm_slot():  # No slot available => 429 "busy" instead of an unbounded queue.
+        answer = await run_in_threadpool(
+            llm_engine.generate_rag_response,
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+        )
 
     latency_ms = (time.perf_counter() - start_time) * 1000
     if latency_ms > settings.max_response_latency_ms:
@@ -412,12 +420,24 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
     owner_id = str(current_user.id)
     heartbeat_s = settings.sse_heartbeat_s if settings.sse_heartbeat_s > 0 else None
 
-    # Kiểm tra hội thoại TRƯỚC khi bắt đầu stream để trả 404 đúng nghĩa (404 cả khi không phải của bạn).
+    # Too many concurrent requests for this user => return a real 429 (with Retry-After) BEFORE starting the stream.
+    # (The actual slot is acquired in events(): if the client disconnects before the stream starts, nothing is leaked.)
+    if not gate.user_has_room(owner_id):
+        raise too_busy(USER_BUSY)
+
+    # Check the conversation BEFORE starting the stream so a proper 404 is returned (also when it belongs to someone else).
     conversation_id: Optional[str] = None
     if payload.conversation_id:
         conversation = await conversation_store.get_owned(payload.conversation_id, owner_id)
         if conversation is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+        if (settings.max_messages_per_conversation > 0
+                and conversation["message_count"] >= settings.max_messages_per_conversation):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This conversation has reached its limit of {settings.max_messages_per_conversation} "
+                       "messages. Please start a new conversation.",
+            )
         conversation_id = str(conversation["id"])
 
     async def events():
@@ -455,10 +475,15 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 )
             return final(intent, answer, citations, standalone_query, cached=cached)
 
+        user_lease = gate.try_acquire_user(owner_id)
+        if user_lease is None:  # Rare race between checking and acquiring a slot; report the error through the stream.
+            yield _sse({"type": "error", "detail": USER_BUSY})
+            return
+        llm_lease = None
         history: List[Any] = list(payload.history)
         try:
             if conversation_id:
-                # Lịch sử LẤY TRƯỚC khi ghi câu hỏi hiện tại để nó không tự xuất hiện trong ngữ cảnh.
+                # Fetch history BEFORE saving the current question so it does not appear in its own context.
                 stored = await conversation_store.recent_history(conversation_id, owner_id)
                 history = [HistoryMessage(**m) for m in stored]
                 await conversation_store.append_message(
@@ -549,6 +574,11 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
             # 4. Streamed generation (qa / explanation / summarization)
             system_prompt, user_prompt = _build_prompts(intent, hits, standalone_query)
             gen_label = f"Writing the answer with {_active_model_name()}"
+            llm_lease = gate.try_acquire_llm()
+            if llm_lease is None:
+                # This is not a real answer: do not save or cache it; the user can simply retry after a few seconds.
+                yield _sse({"type": "error", "detail": LLM_BUSY})
+                return
             yield running("generate", gen_label)
             parts: List[str] = []
             failure: Optional[str] = None
@@ -588,6 +618,11 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
         except Exception as exc:
             logger.exception("Streaming query failed")
             yield _sse({"type": "error", "detail": f"Something went wrong while answering: {exc}"})
+        finally:
+            # Runs even if the client disconnects (the generator is closed/cancelled) => always release the slot.
+            if llm_lease is not None:
+                llm_lease.release()
+            user_lease.release()
 
     return StreamingResponse(
         events(),

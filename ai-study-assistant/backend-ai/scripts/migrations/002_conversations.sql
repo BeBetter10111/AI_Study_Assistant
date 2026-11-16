@@ -1,5 +1,5 @@
--- Lưu lịch sử hội thoại hỏi đáp. Idempotent; backend cũng tự chạy các câu này khi khởi động
--- (app/core/schema.py) nên file này chỉ cần khi AUTO_MIGRATE_SCHEMA=false.
+-- Store Q&A conversation history. Idempotent; the backend also runs these statements at startup
+-- (app/core/schema.py), so this file is needed only when AUTO_MIGRATE_SCHEMA=false.
 
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

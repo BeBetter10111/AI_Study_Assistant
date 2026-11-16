@@ -2,10 +2,10 @@
 
 Hai lớp ``OnnxEmbedder`` và ``OnnxCrossEncoder`` có đúng giao diện mà ``vector_store.py`` đang gọi:
 
-* ``OnnxEmbedder.encode(texts, show_progress_bar=False)`` — giống ``SentenceTransformer.encode``:
+* ``OnnxEmbedder.encode(texts, show_progress_bar=False)`` — matches ``SentenceTransformer.encode``:
   nhận ``str`` -> mảng 1-D, nhận ``list[str]`` -> mảng 2-D. Mean pooling, KHÔNG chuẩn hóa
   (đúng như paraphrase-multilingual-mpnet-base-v2; Qdrant tự chuẩn hóa khi dùng cosine).
-* ``OnnxCrossEncoder.predict(pairs)`` — giống ``CrossEncoder.predict``: model 1 nhãn => sigmoid.
+* ``OnnxCrossEncoder.predict(pairs)`` — matches ``CrossEncoder.predict``: one-label model => sigmoid.
 
 Thư mục model do ``scripts/quantize_models.py`` tạo:
 
@@ -69,7 +69,7 @@ def _make_session(path: Path, threads: int):
 def _load_tokenizer(model_dir: Path):
     from transformers import AutoTokenizer
 
-    # Tokenizer nằm sẵn trong thư mục model => không cần mạng / HF hub lúc chạy.
+    # The tokenizer is included in the model directory => no network/HF Hub access is needed at runtime.
     return AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
 
 
@@ -80,9 +80,9 @@ class _OnnxBase:
         self.meta = read_meta(self.model_dir)
         self.max_length = int(self.meta.get("max_length", 128))
         self.tokenizer = _load_tokenizer(self.model_dir)
-        # Tokenizer "fast" của HuggingFace đổi trạng thái truncation/padding theo từng lời gọi nên dùng
-        # chung giữa nhiều thread (FastAPI threadpool) có thể gây "RuntimeError: Already borrowed".
-        # Tokenize rất nhanh nên khóa ở đây; phần nặng (ONNX Runtime, thread-safe) chạy ngoài khóa.
+        # Hugging Face's "fast" tokenizer changes truncation/padding state per call, so sharing it
+        # across threads (FastAPI thread pool) can cause "RuntimeError: Already borrowed".
+        # Tokenization is fast, so lock it here; the expensive, thread-safe ONNX Runtime work runs outside the lock.
         self._tok_lock = threading.Lock()
         self.session = _make_session(model_file(self.model_dir, precision), threads)
         self._input_names = [i.name for i in self.session.get_inputs()]
@@ -92,7 +92,7 @@ class _OnnxBase:
         for name in self._input_names:
             if name in enc:
                 feed[name] = enc[name].astype(np.int64, copy=False)
-            elif name == "token_type_ids":  # model có input này nhưng tokenizer không sinh ra
+            elif name == "token_type_ids":  # The model accepts this input, but the tokenizer does not produce it.
                 feed[name] = np.zeros_like(enc["input_ids"], dtype=np.int64)
             else:
                 raise KeyError(f"ONNX model needs input '{name}' that the tokenizer did not provide")
@@ -124,7 +124,7 @@ class OnnxEmbedder(_OnnxBase):
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
         step = batch_size or self.batch_size
-        # Sắp theo độ dài để mỗi batch ít padding (nhanh hơn rõ rệt trên CPU), rồi trả lại đúng thứ tự.
+        # Sort by length to minimize padding in each batch (significantly faster on CPU), then restore the original order.
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
         out: List[Optional[np.ndarray]] = [None] * len(texts)
         for start in range(0, len(order), step):
@@ -160,7 +160,7 @@ class OnnxCrossEncoder(_OnnxBase):
             logits = self.session.run(None, self._feed(enc))[0]
             if logits.ndim == 2 and logits.shape[1] == 1:
                 values = 1.0 / (1.0 + np.exp(-logits[:, 0]))
-            elif logits.ndim == 2:  # nhiều nhãn: lấy nhãn "relevant" (cột cuối)
+            elif logits.ndim == 2:  # Multiple labels: use the "relevant" label (last column).
                 values = logits[:, -1]
             else:
                 values = logits.reshape(len(idx))

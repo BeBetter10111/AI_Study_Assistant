@@ -36,7 +36,7 @@ async def get_current_user(
         raw_user_id = payload.get("sub")
         if raw_user_id is None:
             raise credentials_exception
-        # Token của luồng reset password (có claim "purpose") không được dùng như access token.
+        # Tokens issued by the password reset flow (with a "purpose" claim) must not be used as access tokens.
         if payload.get("purpose") is not None:
             raise credentials_exception
     except JWTError as exc:
@@ -56,7 +56,7 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
-    # Sau khi đổi mật khẩu, mọi JWT cấp trước thời điểm đó đều mất hiệu lực.
+    # After a password change, all JWTs issued before that point become invalid.
     if user.password_changed_at is not None:
         changed_at = user.password_changed_at
         if changed_at.tzinfo is None:

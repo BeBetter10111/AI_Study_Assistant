@@ -49,7 +49,7 @@ async def _add_doc(owner_id, name="a.pdf", status="embedded", age_minutes=0, sto
 
 
 # =====================================================================================
-# Tài liệu: liệt kê
+# Documents: list
 # =====================================================================================
 async def test_document_list_requires_login_and_is_scoped_and_newest_first(app_client):
     assert (await app_client.get("/api/documents")).status_code == 401
@@ -68,7 +68,7 @@ async def test_document_list_requires_login_and_is_scoped_and_newest_first(app_c
 
 
 # =====================================================================================
-# Tài liệu: xóa
+# Documents: delete
 # =====================================================================================
 @pytest.fixture
 def backends(monkeypatch):
@@ -107,13 +107,13 @@ async def test_delete_removes_vectors_file_row_and_keeps_history(app_client, bac
     res = await app_client.delete(f"/api/documents/{doc}", headers=headers)
 
     assert res.status_code == 204
-    assert backends["vectors"] == [(doc, uid)]                       # chỉ xóa vector của đúng tài liệu + chủ sở hữu
+    assert backends["vectors"] == [(doc, uid)]                       # Delete vectors only for the specified document and owner.
     assert backends["minio"] == [(settings.minio_bucket, "abc.pdf")]
-    assert backends["cache"] == [uid]                                # câu trả lời cache có thể trích dẫn tài liệu này
+    assert backends["cache"] == [uid]                                # Cached answers may cite this document.
     assert (await app_client.get("/api/documents", headers=headers)).json() == []
     async with coredb.async_session() as s:
-        assert (await s.get(Conversation, conv_id)).document_id is None   # hội thoại còn, chỉ gỡ liên kết
-        assert (await s.get(QuizAttempt, attempt_id)).document_id is None  # lịch sử quiz còn
+        assert (await s.get(Conversation, conv_id)).document_id is None   # Keep the conversation; remove only the link.
+        assert (await s.get(QuizAttempt, attempt_id)).document_id is None  # Keep the quiz history.
 
 
 async def test_cannot_delete_someone_elses_document(app_client, backends):
@@ -155,7 +155,7 @@ async def test_vector_failure_aborts_and_keeps_the_document(app_client, backends
     res = await app_client.delete(f"/api/documents/{doc}", headers=headers)
 
     assert res.status_code == 502
-    assert len((await app_client.get("/api/documents", headers=headers)).json()) == 1   # còn nguyên để thử lại
+    assert len((await app_client.get("/api/documents", headers=headers)).json()) == 1   # Still present for retry.
     assert backends["minio"] == [] and backends["cache"] == []
 
 
@@ -192,7 +192,7 @@ def test_vector_store_delete_document_filters_by_document_and_owner(monkeypatch)
 
 
 # =====================================================================================
-# Hội thoại: CRUD
+# Conversations: CRUD
 # =====================================================================================
 async def _new_conv(client, headers, document_id=None):
     res = await client.post("/api/conversations", headers=headers, json={"document_id": document_id})
@@ -209,7 +209,7 @@ async def test_empty_conversation_is_hidden_until_it_has_a_message(app_client):
 
     listed = (await app_client.get("/api/conversations", headers=headers)).json()
     assert [c["id"] for c in listed] == [conv["id"]]
-    assert listed[0]["title"] == "Stack là gì?"          # tiêu đề tự đặt từ câu hỏi đầu tiên
+    assert listed[0]["title"] == "Stack là gì?"          # Title is generated from the first question.
 
 
 async def test_conversation_detail_messages_in_order_with_citations(app_client):
@@ -226,7 +226,7 @@ async def test_conversation_detail_messages_in_order_with_citations(app_client):
     assert [m["role"] for m in detail["messages"]] == ["user", "assistant", "user"]
     assert detail["messages"][1]["citations"] == [{"chunk_index": 2, "content": "nguồn"}]
     assert detail["messages"][1]["cached"] is True and detail["messages"][1]["intent"] == "qa"
-    assert detail["title"] == "Q1"                       # tin nhắn sau không đổi tiêu đề
+    assert detail["title"] == "Q1"                       # Later messages do not change the title.
 
 
 async def test_long_first_question_gets_a_short_title(app_client):
@@ -248,11 +248,11 @@ async def test_rename_and_delete(app_client):
     assert (await app_client.patch(f"/api/conversations/{conv['id']}", headers=headers, json={"title": ""})
             ).status_code == 422
     assert (await app_client.patch(f"/api/conversations/{conv['id']}", headers=headers, json={"title": "   "})
-            ).status_code == 422                          # chỉ toàn khoảng trắng cũng không hợp lệ
+            ).status_code == 422                          # Whitespace-only input is invalid too.
 
     assert (await app_client.delete(f"/api/conversations/{conv['id']}", headers=headers)).status_code == 204
     assert (await app_client.get(f"/api/conversations/{conv['id']}", headers=headers)).status_code == 404
-    async with coredb.async_session() as s:               # tin nhắn cũng bị xóa
+    async with coredb.async_session() as s:               # Messages are deleted too.
         assert (await s.execute(select(ChatMessage))).scalars().all() == []
 
 
@@ -267,7 +267,7 @@ async def test_other_users_cannot_touch_my_conversations(app_client):
     assert (await app_client.patch(f"/api/conversations/{conv['id']}", headers=b, json={"title": "x"})
             ).status_code == 404
     assert (await app_client.delete(f"/api/conversations/{conv['id']}", headers=b)).status_code == 404
-    # store cũng không ghi/đọc hộ người khác
+    # The store must not write/read on behalf of another user either.
     assert await conversation_store.append_message(conv["id"], "00000000-0000-0000-0000-000000000000",
                                                    "user", "intruder") is False
     assert await conversation_store.recent_history(conv["id"], str(uuid.uuid4())) == []
@@ -281,13 +281,13 @@ async def test_conversation_ids_and_documents_are_validated(app_client):
     other, o_id = await _login(app_client, "bobby")
     foreign_doc = await _add_doc(o_id)
     res = await app_client.post("/api/conversations", headers=headers, json={"document_id": foreign_doc})
-    assert res.status_code == 404                          # không gắn hội thoại vào tài liệu của người khác
+    assert res.status_code == 404                          # Do not link the conversation to another user's document.
     mine = await _add_doc(uid)
     assert (await _new_conv(app_client, headers, mine))["document_id"] == mine
 
 
 # =====================================================================================
-# Hội thoại: lưu qua /query/stream
+# Conversations: save through /query/stream
 # =====================================================================================
 def _events(response):
     return [json.loads(line[5:]) for line in response.text.split("\n\n") if line.startswith("data:")]
@@ -344,7 +344,7 @@ async def test_followup_uses_server_history_not_client_history(app_client, monke
     monkeypatch.setattr(chat_module.llm_engine, "stream_rag_response", _fake_stream(tokens=("OOP is X.",)))
 
     await _stream(app_client, headers, "Tell me about OOP", conv["id"])
-    # client cố tình gửi history giả: phải bị bỏ qua khi đã có conversation_id
+    # A client may send fake history: ignore it when conversation_id is present.
     fake = [{"role": "user", "content": "FAKE"}]
     await _stream(app_client, headers, "and polymorphism?", conv["id"], history=fake)
 
@@ -389,9 +389,9 @@ async def test_stream_rejects_foreign_or_unknown_conversation(app_client, monkey
     assert (await _stream(app_client, b, "hi there", conv["id"])).status_code == 404
     assert (await _stream(app_client, a, "hi there", str(uuid.uuid4()))).status_code == 404
     assert (await _stream(app_client, a, "hi there", "garbage")).status_code == 404
-    assert (await _messages(app_client, a, conv["id"]))["messages"] == []         # không ghi gì vào hội thoại của A
+    assert (await _messages(app_client, a, conv["id"]))["messages"] == []         # Nothing is written to A's conversation.
 
-    # Không có conversation_id: hành vi cũ, không lưu gì
+    # No conversation_id: preserve the old behavior and save nothing.
     assert _events(await _stream(app_client, a, "What is a class?"))[-1]["type"] == "result"
     assert (await app_client.get("/api/conversations", headers=a)).json() == []
 
@@ -407,7 +407,7 @@ async def test_saving_history_failure_never_breaks_chat(app_client, monkeypatch)
 
     def flaky():
         calls["n"] += 1
-        if calls["n"] > 2:             # get_owned + recent_history chạy được, các lần GHI thì hỏng
+        if calls["n"] > 2:             # get_owned + recent_history succeed; write operations fail.
             raise RuntimeError("db write failed")
         return real()
 
@@ -435,11 +435,11 @@ def test_enforce_raises_in_production_and_only_warns_in_development(caplog):
     with pytest.raises(RuntimeError, match="JWT_SECRET"):
         enforce_jwt_secret("change-me", "production")
     with pytest.raises(RuntimeError):
-        enforce_jwt_secret("change-me", "")                      # rỗng => coi như production
+        enforce_jwt_secret("change-me", "")                      # Empty value => treat as production.
     with caplog.at_level("ERROR"):
-        enforce_jwt_secret("change-me", "development")           # không ném lỗi
+        enforce_jwt_secret("change-me", "development")           # Does not raise.
     assert "JWT_SECRET" in caplog.text
-    enforce_jwt_secret("a" * 40, "production")                   # secret tốt: im lặng
+    enforce_jwt_secret("a" * 40, "production")                   # Strong secret: no error.
 
 
 async def test_app_refuses_to_start_with_default_secret(monkeypatch):

@@ -11,10 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, exists, func, select, update
 
 from app.core import database as coredb
 from app.models.models import ChatMessage, Conversation
@@ -44,7 +44,7 @@ def _now() -> datetime:
 
 
 async def get_owned(conversation_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
-    """Trả về {id, title, document_id} nếu hội thoại thuộc về user, ngược lại None."""
+    """Trả về {id, title, document_id, message_count} nếu hội thoại thuộc về user, ngược lại None."""
     cid, oid = parse_uuid(conversation_id), parse_uuid(owner_id)
     if cid is None or oid is None:
         return None
@@ -53,9 +53,12 @@ async def get_owned(conversation_id: str, owner_id: str) -> Optional[Dict[str, A
             select(Conversation.id, Conversation.title, Conversation.document_id)
             .where(Conversation.id == cid, Conversation.owner_id == oid)
         )).first()
-    if row is None:
-        return None
-    return {"id": row.id, "title": row.title, "document_id": row.document_id}
+        if row is None:
+            return None
+        count = (await session.execute(
+            select(func.count(ChatMessage.id)).where(ChatMessage.conversation_id == cid)
+        )).scalar_one()
+    return {"id": row.id, "title": row.title, "document_id": row.document_id, "message_count": int(count)}
 
 
 async def recent_history(conversation_id: str, owner_id: str, limit: int = 6) -> List[Dict[str, str]]:
@@ -111,6 +114,23 @@ async def append_message(
             await session.execute(update(Conversation).where(Conversation.id == cid).values(**values))
             await session.commit()
         return True
-    except Exception:  # noqa: BLE001 - lưu lịch sử không được làm hỏng chat
+    except Exception:  # noqa: BLE001 - Saving history must not break chat.
         logger.exception("Could not save chat message")
         return False
+
+
+async def purge_stale_empty(session, ttl_s: int, owner_id=None) -> int:
+    """Xóa hội thoại RỖNG (chưa từng có tin nhắn) tạo cách đây quá ``ttl_s`` giây. Trả về số dòng đã xóa.
+
+    Hội thoại rỗng sinh ra khi người dùng mở trò chuyện mới nhưng chưa gửi gì (hoặc gửi lỗi trước khi lưu). Chúng
+    bị ẩn khỏi danh sách nên không ai dọn; nếu không xóa thì chỉ là rác tích lũy. Không tự commit: caller commit.
+    """
+    cutoff = _now() - timedelta(seconds=max(0, ttl_s))
+    stmt = delete(Conversation).where(
+        ~exists().where(ChatMessage.conversation_id == Conversation.id),
+        Conversation.created_at < cutoff,
+    )
+    if owner_id is not None:
+        stmt = stmt.where(Conversation.owner_id == owner_id)
+    result = await session.execute(stmt)
+    return int(result.rowcount or 0)

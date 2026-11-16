@@ -70,7 +70,7 @@ export default function ProfilePage({ profile, onUpdated }) {
     }
   };
 
-  // Chế độ xem: hiển thị đúng các ô nhập ở dạng chỉ đọc, để bố cục không nhảy khi bấm Chỉnh sửa.
+  // View mode: show the same fields as read-only so the layout does not shift when Edit is clicked.
   const value = (field) => (editing ? form[field] : profile[field] || "");
 
   return (

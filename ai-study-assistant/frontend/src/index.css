@@ -1225,7 +1225,7 @@ p {
 }
 
 
-/* Hàng trong danh sách (hội thoại / tài liệu) có nút xóa hiện khi rê chuột hoặc focus bàn phím */
+/* List rows (conversations / documents) show the delete button on hover or keyboard focus. */
 .row {
   position: relative;
 }

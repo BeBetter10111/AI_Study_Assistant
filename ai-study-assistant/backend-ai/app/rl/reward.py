@@ -2,13 +2,13 @@ CORRECTNESS_WEIGHT = 0.6
 SPEED_WEIGHT = 0.3
 HINT_PENALTY_WEIGHT = 0.1
 
-# Ngưỡng thời gian phản hồi (giây): trả lời trong khoảng này trở xuống được
-# tính là "nhanh" và nhận trọn điểm tốc độ; chậm hơn thì điểm tốc độ giảm dần
-# về 0 (không âm).
+# Response-time threshold (seconds): answers within this time count as "fast"
+# and receive the full speed score; slower answers get a gradually decreasing
+# speed score down to 0 (never negative).
 FAST_RESPONSE_THRESHOLD_S = 30.0
 
-# Số lượt gợi ý tối đa được tính vào phạt điểm — tránh trường hợp biên khi
-# học sinh bấm gợi ý rất nhiều lần khiến điểm phạt vượt quá trọng số của nó.
+# Maximum number of hints counted toward the penalty — prevents the penalty
+# from exceeding its weight if a student requests hints many times.
 MAX_HINTS_CONSIDERED = 5
 
 
@@ -38,6 +38,6 @@ def compute_reward(is_correct: bool, response_time_s: float, hints_used: int) ->
         - HINT_PENALTY_WEIGHT * hint_penalty
     )
 
-    # Kẹp kết quả trong [0, 1] để tránh sai số dấu phẩy động đẩy giá trị ra
-    # ngoài biên khi các trọng số được tinh chỉnh sau này.
+    # Clamp the result to [0, 1] so floating-point errors do not push it
+    # out of range if the weights are tuned later.
     return max(0.0, min(1.0, reward))

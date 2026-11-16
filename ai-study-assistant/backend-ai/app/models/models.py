@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -60,7 +60,7 @@ class UserRLState(Base):
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True, nullable=False)
     difficulty_index = Column(Integer, default=0, nullable=False)
-    # Lịch sử reward (float list) lưu dưới dạng JSON text
+    # Reward history (list of floats) stored as JSON text
     reward_history_json = Column(Text, default="[]", nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -78,6 +78,9 @@ class Document(Base):
     mime_type = Column(String(128))
     status = Column(String(32), default="pending", nullable=False)
     storage_path = Column(String(512))
+    # Original file size in bytes, used to calculate each user's storage quota. NULL for documents uploaded before this column
+    # (counted as 0 bytes when calculating the total).
+    size_bytes = Column(BigInteger, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     owner = relationship("User", back_populates="documents")
@@ -109,7 +112,7 @@ class Conversation(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
                       nullable=False, index=True)
     title = Column(String(200), nullable=False, default="")
-    # Phạm vi tài liệu lúc tạo (NULL = tất cả). Xóa tài liệu => về NULL, cuộc trò chuyện vẫn còn.
+    # Document scope at creation time (NULL = all documents). Deleting a document sets this to NULL; the conversation remains.
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now(), onupdate=_utcnow)
@@ -127,10 +130,10 @@ class ChatMessage(Base):
                              nullable=False, index=True)
     role = Column(String(16), nullable=False)          # "user" | "assistant"
     content = Column(Text, nullable=False)
-    citations_json = Column(Text, nullable=True)       # JSON text (cùng kiểu với UserRLState.reward_history_json)
+    citations_json = Column(Text, nullable=True)       # JSON text (same format as UserRLState.reward_history_json).
     intent = Column(String(32), nullable=True)
     cached = Column(Boolean, nullable=False, default=False)
-    # created_at được gán ở phía ứng dụng (độ chính xác micro-giây) để thứ tự tin nhắn luôn ổn định.
+    # created_at is assigned by the application (microsecond precision) to keep message ordering stable.
     created_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now())
 
     conversation = relationship("Conversation", back_populates="messages")

@@ -3,7 +3,7 @@ import { forgotPassword, getErrorMessage } from "../../services/api";
 import { authStyles as styles } from "./authStyles";
 import AuthFooterLinks from "./AuthFooterLinks";
 
-// Bước 1: nhập email -> backend gửi mã UUID qua email.
+// Step 1: enter an email address -> the backend emails a UUID code.
 export default function ForgotPasswordPage({ initialEmail = "", onCodeSent, onGoLogin, onGoSignup }) {
   const [email, setEmail] = useState(initialEmail);
   const [error, setError] = useState(null);
@@ -17,7 +17,7 @@ export default function ForgotPasswordPage({ initialEmail = "", onCodeSent, onGo
     setError(null);
     try {
       await forgotPassword(value);
-      // Backend luôn trả thành công (không lộ email nào tồn tại) -> sang bước nhập mã.
+      // The backend always returns success (to avoid revealing whether an email exists) -> continue to code entry.
       onCodeSent(value);
     } catch (err) {
       setError(getErrorMessage(err, "Could not send the code. Please try again."));

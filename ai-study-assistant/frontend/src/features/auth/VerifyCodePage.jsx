@@ -3,9 +3,9 @@ import { forgotPassword, getErrorMessage, verifyResetCode } from "../../services
 import { authStyles as styles } from "./authStyles";
 import AuthFooterLinks from "./AuthFooterLinks";
 
-const RESEND_COOLDOWN_S = 60; // khớp PASSWORD_RESET_RESEND_COOLDOWN_S ở backend
+const RESEND_COOLDOWN_S = 60; // Matches PASSWORD_RESET_RESEND_COOLDOWN_S on the backend.
 
-// Bước 2: user mở email, copy mã UUID và dán vào đây.
+// Step 2: the user opens the email, copies the UUID code, and pastes it here.
 export default function VerifyCodePage({ email, onVerified, onChangeEmail, onGoLogin, onGoSignup }) {
   const [code, setCode] = useState("");
   const [error, setError] = useState(null);

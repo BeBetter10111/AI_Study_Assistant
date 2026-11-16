@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
-_LOCK_KEY = 727_274_001  # khoá advisory: nhiều bản backend khởi động cùng lúc không chạy song song
+_LOCK_KEY = 727_274_001  # Advisory lock: prevent multiple backend instances from running this concurrently at startup.
 
-# Bảng nào chưa có thì tạo — nội dung khớp scripts/init_db.sql.
+# Create any missing tables; definitions match scripts/init_db.sql.
 _CREATE_TABLES: list[tuple[str, str]] = [
     ("users", """
         CREATE TABLE IF NOT EXISTS users (
@@ -95,8 +95,8 @@ _PASSWORD_RESET_COLUMNS = {
     "id", "user_id", "token_hash", "expires_at", "verified_at", "used", "failed_attempts", "created_at",
 }
 
-# Cột có thể thiếu ở database cũ. Chỉ cột nullable / có DEFAULT nên ADD COLUMN không bao giờ
-# thất bại vì dữ liệu hiện có. (Phần UNIQUE chỉ áp dụng khi cột được thêm mới.)
+# Columns may be missing from older databases. These columns are nullable or have a DEFAULT,
+# so ADD COLUMN cannot fail because of existing data. (UNIQUE applies only when a column is newly added.)
 _ADD_COLUMNS: list[tuple[str, str, str]] = [
     ("users", "full_name", "VARCHAR(255)"),
     ("users", "phone", "VARCHAR(30) UNIQUE"),
@@ -107,6 +107,7 @@ _ADD_COLUMNS: list[tuple[str, str, str]] = [
     ("documents", "mime_type", "VARCHAR(128)"),
     ("documents", "status", "VARCHAR(32) DEFAULT 'pending'"),
     ("documents", "storage_path", "VARCHAR(512)"),
+    ("documents", "size_bytes", "BIGINT"),
     ("documents", "created_at", "TIMESTAMPTZ DEFAULT now()"),
     ("quiz_attempts", "user_id", "UUID REFERENCES users(id)"),
     ("quiz_attempts", "document_id", "UUID REFERENCES documents(id)"),
@@ -155,8 +156,8 @@ async def ensure_schema(engine: AsyncEngine) -> list[str]:
             for name, ddl in _CREATE_TABLES:
                 await _run(conn, ddl, f"create table {name}")
 
-            # Bảng reset password đời cũ (cột `token` VARCHAR(36), chưa code nào dùng) không có
-            # chỗ cho hash -> tạo lại. Chỉ chứa mã tạm thời hết hạn sau vài phút nên không mất gì.
+            # The legacy password-reset table (with an unused `token` VARCHAR(36) column) cannot
+            # hold a hash, so recreate it. It only stores temporary codes that expire within minutes.
             have = (await _snapshot(conn)).get("password_reset_tokens")
             if have is None:
                 await _run(conn, _PASSWORD_RESET_DDL, "create table password_reset_tokens")

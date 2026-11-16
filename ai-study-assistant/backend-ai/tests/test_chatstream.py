@@ -23,8 +23,8 @@ PW = "firstpassword1"
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
-    monkeypatch.setattr(limiter, "enabled", False)                      # bộ đếm rate limit dùng chung giữa test
-    monkeypatch.setattr(settings, "semantic_cache_enabled", False)      # mặc định: không đụng Redis
+    monkeypatch.setattr(limiter, "enabled", False)                      # The rate-limit counter is shared across tests.
+    monkeypatch.setattr(settings, "semantic_cache_enabled", False)      # Default: do not touch Redis.
 
 
 def _events(response):
@@ -89,7 +89,7 @@ async def test_stream_reports_real_steps_tokens_then_result(app_client, monkeypa
     assert events[-1]["data"]["answer"] == "Answer [1]"
     assert events[-1]["data"]["cached"] is False
     assert events[-1]["data"]["citations"][0]["page_number"] == 3
-    # token đến TRƯỚC result (đó là điều làm chữ hiện dần trên giao diện)
+    # Tokens arrive BEFORE the result (this is what makes text appear progressively in the UI).
     kinds = [e["type"] for e in events]
     assert kinds.index("token") < kinds.index("result")
 
@@ -174,8 +174,8 @@ def cache_on(monkeypatch):
 
     vectors = {
         "What is a class?": [1.0, 0.0, 0.0],
-        "What does a class mean?": [0.97, 0.243, 0.0],   # cosine ≈ 0.97 với câu trên, cùng intent (qa)
-        "Explain what a class is": [0.97, 0.243, 0.0],   # cùng nghĩa nhưng intent = explanation
+        "What does a class mean?": [0.97, 0.243, 0.0],   # cosine ≈ 0.97 with the question above, same intent (qa)
+        "Explain what a class is": [0.97, 0.243, 0.0],   # Same meaning but intent = explanation.
         "What is an interface?": [0.0, 1.0, 0.0],
     }
     server = fakeredis.FakeServer()
@@ -209,20 +209,20 @@ async def test_similar_question_is_served_from_cache_without_search_or_llm(app_c
     assert calls == {"search": 1, "llm": 1}
 
     second = _events(await _ask(app_client, headers, "What does a class mean?"))
-    assert calls == {"search": 1, "llm": 1}                      # KHÔNG gọi lại search / LLM
+    assert calls == {"search": 1, "llm": 1}                      # Do NOT call search / LLM again.
     result = second[-1]
     assert result["type"] == "result" and result["data"]["cached"] is True
     assert result["data"]["answer"] == "Answer [1]"
-    assert result["data"]["citations"][0]["page_number"] == 3     # nguồn trích dẫn được giữ nguyên
+    assert result["data"]["citations"][0]["page_number"] == 3     # Preserve the citation source.
     cache_step = [e for e in second if e.get("id") == "cache" and e["status"] == "done"]
     assert cache_step and "similar" in cache_step[0]["detail"]
     assert not any(e["type"] == "token" for e in second)
 
-    other = _events(await _ask(app_client, headers, "What is an interface?"))   # khác nghĩa => miss
+    other = _events(await _ask(app_client, headers, "What is an interface?"))   # Different meaning => cache miss.
     assert other[-1]["data"]["cached"] is False
     assert calls == {"search": 2, "llm": 2}
 
-    # Cùng nghĩa nhưng khác intent (explanation dùng prompt khác) => phạm vi cache khác => miss.
+    # Same meaning but a different intent (explanation uses a different prompt) => different cache scope => miss.
     explained = _events(await _ask(app_client, headers, "Explain what a class is"))
     assert explained[-1]["data"]["cached"] is False
     assert calls == {"search": 3, "llm": 3}
@@ -256,7 +256,7 @@ async def test_errors_and_empty_results_are_never_cached(app_client, monkeypatch
     monkeypatch.setattr(chat_module.vector_store, "search_similar_chunks", search)
     await _ask(app_client, headers, "What is a class?")
     await _ask(app_client, headers, "What is a class?")
-    assert searches["n"] == 2                                      # "không tìm thấy" không được cache
+    assert searches["n"] == 2                                      # "No content found" is not cached.
 
     monkeypatch.setattr(chat_module.vector_store, "search_similar_chunks", lambda **k: [_HIT])
     monkeypatch.setattr(chat_module.llm_engine, "stream_rag_response", _fake_stream(error="Ollama down"))
@@ -264,7 +264,7 @@ async def test_errors_and_empty_results_are_never_cached(app_client, monkeypatch
 
     monkeypatch.setattr(chat_module.llm_engine, "stream_rag_response", _fake_stream())
     again = _events(await _ask(app_client, headers, "What is a class?"))
-    assert again[-1]["data"]["cached"] is False                    # lỗi trước đó không để lại mục nào
+    assert again[-1]["data"]["cached"] is False                    # The previous error did not leave a cache entry.
     assert again[-1]["data"]["answer"] == "Answer [1]"
 
 
@@ -289,7 +289,7 @@ async def test_redis_down_does_not_break_chat(app_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------------------
-# Client ngắt kết nối => dừng LLM
+# Client disconnects => stop the LLM
 # ---------------------------------------------------------------------------------------
 async def test_closing_the_response_closes_the_llm_stream(monkeypatch):
     closed = threading.Event()
@@ -300,7 +300,7 @@ async def test_closing_the_response_closes_the_llm_stream(monkeypatch):
                 for i in range(1000):
                     yield {"token": f"t{i} "}
             finally:
-                closed.set()          # = with httpx.stream(...) thoát => Ollama ngừng sinh
+                closed.set()          # = exiting with httpx.stream(...) => Ollama stops generating
 
         return gen()
 
@@ -316,7 +316,7 @@ async def test_closing_the_response_closes_the_llm_stream(monkeypatch):
     async for chunk in body:
         if '"type": "token"' in chunk or '"type":"token"' in chunk:
             seen_token = True
-            break                      # người dùng bấm "Dừng" / đóng tab giữa chừng
+            break                      # The user clicked "Stop" / closed the tab mid-stream.
     assert seen_token
     await body.aclose()
 

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import types  # noqa: E402
 
-try:  # chỉ để import được app.rag.vector_store trong môi trường tối giản (không dùng đến chunking ở đây)
+try:  # Only needed to import app.rag.vector_store in this minimal environment (chunking is not used here).
     import langchain_text_splitters  # noqa: F401
 except ImportError:
     sys.modules["langchain_text_splitters"] = types.SimpleNamespace(RecursiveCharacterTextSplitter=object)
@@ -112,12 +112,12 @@ result["rerank_range_ok"] = bool(((scores >= 0) & (scores <= 1)).all() and len(s
 result["rerank_order_ok"] = bool(np.allclose(ce.predict(pairs[::-1]), scores[::-1], atol=1e-4))
 result["rerank_empty"] = list(ce.predict([]).shape)
 
-# --- nhiều thread dùng chung một model (như threadpool của FastAPI): kết quả phải giống tuần tự ----
+# --- Multiple threads share one model (as in FastAPI's thread pool): results must match sequential execution ----
 import threading  # noqa: E402
 
 errors, outs = [], {}
-# Lượng tử hóa động tính hệ số co giãn theo cả batch nên kết quả phụ thuộc nhẹ vào các câu đi cùng;
-# vì vậy so với kết quả tuần tự CÙNG thành phần batch (một câu / cùng danh sách cặp).
+# Dynamic quantization calculates scale factors across the whole batch, so results depend slightly on other items in the batch;
+# therefore, compare against sequential execution with the SAME batch composition (one sentence / the same list of pairs).
 single_ref = {i: emb.encode(texts[i % len(texts)]) for i in range(8)}
 
 
@@ -137,7 +137,7 @@ result["concurrent_consistent"] = bool(
     all(np.allclose(outs[i][0], single_ref[i], atol=1e-6) and np.allclose(outs[i][1], scores, atol=1e-6)
         for i in outs) and len(outs) == 8)
 
-# --- vector_store: dùng ONNX khi có file, tự quay về PyTorch khi thiếu -----------------------
+# --- vector_store: use ONNX when files are present, fall back to PyTorch when missing -----------------------
 settings.rag_onnx_enabled, settings.rag_onnx_dir, settings.rag_onnx_precision = True, str(out), "int8"
 settings.rag_embedding_model, settings.rag_reranker_model, settings.rag_rerank_enabled = emb_name, rr_name, True
 vs._embedding_model = vs._reranker = None
@@ -153,13 +153,13 @@ orig = model.encode
 model.encode = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), orig(*a, **k))[1]
 v1, v2 = vs.embed_query("stack là gì"), vs.embed_query("stack là gì")
 result["embed_query_cached_calls"] = calls["n"]
-v1[0] += 100  # sửa bản sao không được làm hỏng cache
+v1[0] += 100  # Modifying the copy must not corrupt the cache.
 result["embed_query_copy_safe"] = bool(np.allclose(vs.embed_query("stack là gì"), v2))
 
-settings.rag_onnx_dir = str(work / "does-not-exist")  # thiếu file => quay về PyTorch (hành vi cũ)
+settings.rag_onnx_dir = str(work / "does-not-exist")  # Missing files => fall back to PyTorch (legacy behavior).
 vs._embedding_model = None
 try:
-    class _ST:  # SentenceTransformer giả, để không phải tải model thật
+    class _ST:  # Mock SentenceTransformer to avoid downloading the real model.
         def __init__(self, *a, **k):
             pass
 

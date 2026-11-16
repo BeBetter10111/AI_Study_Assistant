@@ -7,12 +7,13 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
-from app.core.conversation_store import DEFAULT_TITLE, parse_uuid
+from app.config import settings
+from app.core.conversation_store import DEFAULT_TITLE, parse_uuid, purge_stale_empty
 from app.models.models import ChatMessage, Conversation, Document, User
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ async def _owned(db: AsyncSession, conversation_id: str, user: User) -> Conversa
         conv = (await db.execute(
             select(Conversation).where(Conversation.id == cid, Conversation.owner_id == user.id)
         )).scalar_one_or_none()
-    if conv is None:  # 404 cho cả "không tồn tại" lẫn "không phải của bạn"
+    if conv is None:  # Return 404 both when it does not exist and when it belongs to someone else.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
     return conv
 
@@ -114,6 +115,37 @@ async def create_conversation(
         if owned is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
         document_id = doc_uuid
+
+    # 1) Clean up this user's old empty conversations (no background job required).
+    await purge_stale_empty(db, settings.empty_conversation_ttl_s, current_user.id)
+
+    # 2) Reuse an existing empty conversation instead of creating another. This prevents repeated create calls from
+    #    bloating the table: each user can have at most one empty conversation at a time.
+    no_messages = ~exists().where(ChatMessage.conversation_id == Conversation.id)
+    reusable = (await db.execute(
+        select(Conversation)
+        .where(Conversation.owner_id == current_user.id, no_messages)
+        .order_by(Conversation.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if reusable is not None:
+        reusable.document_id = document_id
+        await db.commit()
+        await db.refresh(reusable)
+        return _out(reusable)
+
+    # 3) Per-user conversation limit.
+    cap = settings.max_conversations_per_user
+    if cap > 0:
+        total = (await db.execute(
+            select(func.count(Conversation.id)).where(Conversation.owner_id == current_user.id)
+        )).scalar_one()
+        if int(total) >= cap:
+            await db.commit()  # Persist the cleanup performed in step 1.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Conversation limit reached ({cap}). Delete some old conversations to start a new one.",
+            )
 
     conv = Conversation(id=uuid.uuid4(), owner_id=current_user.id, title="", document_id=document_id)
     db.add(conv)
@@ -163,7 +195,7 @@ async def delete_conversation(
     current_user: User = Depends(get_current_user),
 ):
     conv = await _owned(db, conversation_id, current_user)
-    # Xóa tin nhắn tường minh (không dựa vào ON DELETE CASCADE) để chạy giống nhau trên mọi DB.
+    # Delete messages explicitly (do not rely on ON DELETE CASCADE) for consistent behavior across databases.
     await db.execute(delete(ChatMessage).where(ChatMessage.conversation_id == conv.id))
     await db.execute(delete(Conversation).where(Conversation.id == conv.id))
     await db.commit()

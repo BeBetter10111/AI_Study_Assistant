@@ -43,7 +43,7 @@ SPARSE_NAME = "bm25"
 _embedding_model = None
 _reranker = None
 _reranker_failed = False
-# "onnx-int8" | "onnx-fp32" | "torch" — cho log và cho khóa semantic cache.
+# "onnx-int8" | "onnx-fp32" | "torch" — used for logging and the semantic-cache key.
 _embedding_backend = "unloaded"
 _reranker_backend = "unloaded"
 
@@ -76,7 +76,7 @@ def _try_onnx(model_name: str, kind: str):
     try:
         cls = onnx_models.OnnxEmbedder if kind == "embedding" else onnx_models.OnnxCrossEncoder
         return cls(directory, precision=precision, threads=settings.rag_onnx_threads)
-    except Exception as exc:  # file hỏng / thiếu onnxruntime / tokenizer thiếu ...
+    except Exception as exc:  # Corrupt file / missing onnxruntime / missing tokenizer, etc.
         logger.warning(f"Could not load ONNX {kind} from {directory} — using PyTorch: {exc}")
         return None
 

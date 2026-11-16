@@ -6,14 +6,14 @@ Mỗi phạm vi chỉ giữ vài trăm mục nên so cosine bằng numpy là đ�
 
 An toàn dữ liệu (quan trọng hơn tốc độ)
 ---------------------------------------
-* KHÓA PHẠM VI gồm ``owner_id`` => không bao giờ trả câu trả lời của người dùng này cho người khác.
-* Phạm vi còn gồm tài liệu được chọn, intent (qa/explanation/summarization), ``top_k`` và "dấu vân tay"
+* The cache key includes ``owner_id`` => one user's answer is never returned to another user.
+* The key also includes the selected documents, intent (qa/explanation/summarization), ``top_k``, and a "fingerprint"
   của model (LLM + embedding + re-ranker): đổi model là cache cũ tự không còn khớp.
-* ``generation`` theo từng user: bump khi có tài liệu mới được nhúng xong => câu trả lời cũ (dựa trên
+* ``generation`` is tracked per user: increment it after a new document is embedded => old answers (based on
   tập tài liệu cũ) không bị dùng lại. Mục cũ tự hết hạn theo TTL.
-* Hai câu hỏi chỉ khác nhau về SỐ ("slide 3" vs "slide 4", "chương 2" vs "chương 5") KHÔNG bao giờ
+* Two questions that differ only by a NUMBER ("slide 3" vs "slide 4", "chapter 2" vs "chapter 5") are NEVER
   được coi là trùng, dù embedding rất giống nhau.
-* Chỉ lưu câu trả lời HOÀN CHỈNH, có nguồn trích dẫn. Không lưu lỗi, "không tìm thấy nội dung",
+* Only COMPLETE answers with citations are cached. Errors and "no content found" responses are not cached,
   hay câu trả lời bị ngắt giữa chừng.
 
 Chịu lỗi (fail-open)
@@ -96,7 +96,7 @@ class SemanticCache:
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._down_until = 0.0
 
-    # ---- hạ tầng ------------------------------------------------------------------
+    # ---- infrastructure ------------------------------------------------------------------
     @property
     def enabled(self) -> bool:
         return bool(settings.semantic_cache_enabled)
@@ -110,7 +110,7 @@ class SemanticCache:
                        f"skipping it for {int(_COOLDOWN_S)}s; chat continues without cache.")
 
     def _redis(self):
-        # Client asyncio gắn với event loop đã tạo ra nó -> tạo lại nếu loop đổi (vd. giữa các test).
+        # An asyncio client is tied to the event loop that created it -> recreate it if the loop changes (e.g. between tests).
         loop = asyncio.get_running_loop()
         if self._client is None or self._client_loop is not loop:
             if self._client_factory is not None:
@@ -154,7 +154,7 @@ class SemanticCache:
                 lambda: (_normalise(self._embed(query)), self._fingerprint())
             )
             generation = int(await self._redis().get(generation_key(owner_id)) or 0)
-        except Exception as exc:  # noqa: BLE001 - cache KHÔNG được làm hỏng chat
+        except Exception as exc:  # noqa: BLE001 - The cache must NOT break chat.
             self._trip(exc)
             return None
         scope = hashlib.sha1(
@@ -178,12 +178,12 @@ class SemanticCache:
             best_id, best_sim, best_q = None, -1.0, ""
             stale: List[bytes] = []
             for entry_id, (emb, q) in zip(ids, rows):
-                if emb is None:  # mục đã hết hạn theo TTL nhưng còn trong chỉ mục
+                if emb is None:  # The entry expired by TTL but remains in the index.
                     stale.append(entry_id)
                     continue
                 vec = np.frombuffer(emb, dtype=np.float32)
                 if vec.shape != session.embedding.shape:
-                    continue  # model embedding khác chiều -> bỏ qua
+                    continue  # Embedding model has a different dimension -> skip this entry.
                 sim = float(np.dot(vec, session.embedding))
                 matched = q.decode("utf-8") if isinstance(q, (bytes, bytearray)) else str(q or "")
                 if sim > best_sim and _numbers(matched) == query_numbers:
@@ -197,7 +197,7 @@ class SemanticCache:
             if raw is None:
                 return None
             payload = json.loads(raw)
-            # LRU: mục vừa được dùng đẩy lên đầu, và đếm số lần trúng cho dễ theo dõi.
+            # LRU: move the recently used entry to the front and count hits for easier monitoring.
             await r.zadd(session.index_key, {best_id: time.time()})
             await r.hincrby(self._entry_key(best_id), "hits", 1)
             return CacheHit(payload=payload, similarity=best_sim, matched_query=best_q)
@@ -223,7 +223,7 @@ class SemanticCache:
             pipe.expire(session.index_key, ttl)
             await pipe.execute()
 
-            # Giới hạn kích thước phạm vi: bỏ các mục cũ nhất (ít được dùng nhất).
+            # Enforce the scope-size limit by removing the oldest (least recently used) entries.
             limit = int(settings.semantic_cache_max_entries)
             extra = int(await r.zcard(session.index_key)) - limit
             if extra > 0:

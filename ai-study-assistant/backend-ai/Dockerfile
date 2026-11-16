@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # =============================================================================
-# Stage 1 — builder: cài toàn bộ Python deps vào virtualenv /opt/venv
-# (build-essential chỉ nằm ở stage này, không lọt vào image cuối)
+# Stage 1 — builder: install all Python dependencies into the /opt/venv virtual environment
+# (build-essential is used only in this stage and is not included in the final image)
 # =============================================================================
 FROM python:3.11-slim AS builder
 
@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# uv thay cho pip: resolve + cài nhanh hơn nhiều, và không bị "backtracking"
-# kéo dài như pip (log cũ: pip tải lần lượt hàng chục bản langsmith, ~25s/bản).
+# Use uv instead of pip: dependency resolution and installation are much faster, avoiding pip's prolonged
+# "backtracking" (previous logs showed pip downloading dozens of langsmith versions, ~25 seconds per version).
 RUN pip install --no-cache-dir "uv>=0.5,<1" && uv venv --seed /opt/venv
 
 ENV VIRTUAL_ENV=/opt/venv \
@@ -19,12 +19,12 @@ ENV VIRTUAL_ENV=/opt/venv \
     UV_LINK_MODE=copy
 
 # --- torch ------------------------------------------------------------------
-# Mặc định cài torch bản CPU (~200MB) thay vì bản CUDA từ PyPI (kéo theo
-# ~2-3GB gói nvidia-*). docker-compose.yml hiện không cấp GPU cho container
-# nên bản CUDA không có tác dụng. Nếu sau này container cần GPU NVIDIA:
+# By default, install the CPU version of torch (~200 MB) instead of the CUDA version from PyPI (which pulls in
+# ~2-3 GB of nvidia-* packages). docker-compose.yml does not currently grant the container GPU access,
+# so the CUDA build provides no benefit. If the container later needs an NVIDIA GPU:
 #   docker build --build-arg TORCH_INDEX_URL= ./backend-ai
-# (để trống = cài torch mặc định từ PyPI).
-# Đặt TRƯỚC `COPY requirements.txt` để đổi requirements.txt không làm tải lại torch.
+# (leave empty to install the default torch package from PyPI).
+# Place this BEFORE `COPY requirements.txt` so changes to requirements.txt do not reinstall torch.
 ARG TORCH_VERSION=2.4.0
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -32,23 +32,23 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         uv pip install "torch==${TORCH_VERSION}" --index-url "$TORCH_INDEX_URL"; \
     fi
 
-# --- phần còn lại của dependencies -------------------------------------------
+# --- remaining dependencies ---------------------------------------------------
 WORKDIR /build
 COPY requirements.txt .
 
-# Chốt an toàn: TORCH_VERSION ở trên phải khớp requirements.txt, nếu không
-# bước dưới sẽ âm thầm cài lại torch CUDA từ PyPI.
+# Safety check: TORCH_VERSION above must match requirements.txt; otherwise,
+# the step below may silently reinstall the CUDA build of torch from PyPI.
 RUN grep -qE "^torch==${TORCH_VERSION}[[:space:]]*$" requirements.txt \
     || { echo "ERROR: TORCH_VERSION=${TORCH_VERSION} không khớp dòng torch== trong requirements.txt" >&2; exit 1; }
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements.txt
 
-# Chỉ in thông tin để dễ kiểm tra trong log build (không làm fail build).
+# Print information for easier inspection of build logs (does not fail the build).
 RUN uv pip list 2>/dev/null | grep -i -E '^(torch|nvidia)' || true
 
 # =============================================================================
-# Stage 2 — runtime: image cuối, chỉ có tesseract + venv đã build sẵn + code
+# Stage 2 — runtime: final image containing only tesseract, the built virtual environment, and the application code
 # =============================================================================
 FROM python:3.11-slim AS runtime
 
@@ -57,11 +57,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr tesseract-ocr-vie tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Chạy bằng user thường, KHÔNG phải root ----------------------------------
-# Nếu ứng dụng bị khai thác (file upload độc hại, lỗ hổng thư viện...), kẻ tấn công chỉ có quyền của
-# user `app` thay vì root trong container. Model ONNX và cache HuggingFace là nơi duy nhất cần ghi; chúng nằm
-# NGOÀI /app (docker-compose gắn named volume vào đó). Không đặt dưới /app vì /app bị bind-mount trong dev:
-# volume lồng trong bind mount có thể thuộc root và user `app` sẽ không ghi được.
+# --- Run as an unprivileged user, NOT root ------------------------------------
+# If the application is exploited (malicious upload, vulnerable dependency, etc.), an attacker has only the
+# `app` user's permissions rather than root inside the container. ONNX models and the Hugging Face cache are the only writable
+# directories; they are OUTSIDE /app (docker-compose mounts named volumes there). Do not place them under /app because /app
+# is bind-mounted in development: a nested volume may be owned by root, preventing the `app` user from writing to it.
 ARG APP_UID=10001
 RUN groupadd --gid ${APP_UID} app \
     && useradd --uid ${APP_UID} --gid app --create-home --home-dir /home/app --shell /usr/sbin/nologin app \

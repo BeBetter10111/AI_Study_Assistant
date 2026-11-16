@@ -1,4 +1,3 @@
-import io
 import logging
 import mimetypes
 import os
@@ -9,12 +8,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
 from app.config import settings
+from app.core.concurrency import SlotTimeout, upload_slots
 from app.core.database import minio_client
 from app.models.models import Conversation, Document, QuizAttempt, User
 from app.rag.semantic_cache import semantic_cache
@@ -49,6 +49,48 @@ def _check_magic_bytes(extension: str, data: bytes) -> bool:
     return any(data[:len(sig)] == sig for sig in signatures)
 
 
+async def _upload_size(file: UploadFile) -> int:
+    """Dung lượng file mà KHÔNG đọc nội dung vào RAM (Starlette đã ghi sẵn ra file tạm)."""
+    size = getattr(file, "size", None)
+    if size is not None:
+        return int(size)
+    file.file.seek(0, 2)
+    end = file.file.tell()
+    file.file.seek(0)
+    return int(end)
+
+
+async def _enforce_quota(db: AsyncSession, owner_id, incoming_bytes: int) -> None:
+    """Hạn mức mỗi user: số tài liệu và tổng dung lượng. Tài liệu cũ (size_bytes NULL) tính là 0 byte."""
+    count, used = (await db.execute(
+        select(func.count(Document.id), func.coalesce(func.sum(Document.size_bytes), 0))
+        .where(Document.owner_id == owner_id)
+    )).one()
+    max_docs = settings.max_documents_per_user
+    if max_docs > 0 and int(count) >= max_docs:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Document limit reached ({max_docs}). Delete some documents before uploading more.",
+        )
+    cap = settings.max_storage_per_user_mb * 1024 * 1024
+    if cap > 0 and int(used) + incoming_bytes > cap:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Storage limit reached ({settings.max_storage_per_user_mb}MB). "
+                   "Delete some documents before uploading more.",
+        )
+
+
+def _store_object(storage_path: str, fileobj, size: int, mime_type: str) -> None:
+    """Ghi file lên MinIO (đồng bộ — gọi trong threadpool). Truyền thẳng file tạm, không nạp cả file vào RAM."""
+    if not minio_client.bucket_exists(settings.minio_bucket):
+        minio_client.make_bucket(settings.minio_bucket)
+    fileobj.seek(0)
+    minio_client.put_object(
+        settings.minio_bucket, storage_path, fileobj, length=size, content_type=mime_type,
+    )
+
+
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def upload_document(
@@ -71,10 +113,10 @@ async def upload_document(
 
     mime_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
-    contents = await file.read()
-    if not contents:
+    size = await _upload_size(file)
+    if size <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
-    if len(contents) > MAX_UPLOAD_SIZE_BYTES:
+    if size > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File {filename} exceeds the maximum size of {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB.",
@@ -82,7 +124,11 @@ async def upload_document(
 
     # Security: validate actual file content via magic bytes, not just the
     # client-supplied extension/Content-Type which can be trivially spoofed.
-    if not _check_magic_bytes(extension, contents):
+    # The signature is only in the first few bytes, so read only the beginning of the file.
+    await file.seek(0)
+    header = await file.read(16)
+    await file.seek(0)
+    if not _check_magic_bytes(extension, header):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=(
@@ -91,47 +137,46 @@ async def upload_document(
             ),
         )
 
-    document = Document(
-        owner_id=current_user.id,
-        filename=filename,
-        mime_type=mime_type,
-        status="pending",
-    )
-    db.add(document)
+    owner_id = current_user.id
+    await _enforce_quota(db, owner_id, size)
     await db.commit()
-    await db.refresh(document)
-
-    storage_path = f"{document.id}{extension}"
 
     try:
-        if not minio_client.bucket_exists(settings.minio_bucket):
-            minio_client.make_bucket(settings.minio_bucket)
+        async with upload_slots.slot(settings.upload_slot_wait_s):
+            document = Document(
+                owner_id=owner_id, filename=filename, mime_type=mime_type, status="pending", size_bytes=size,
+            )
+            db.add(document)
+            await db.commit()
+            await db.refresh(document)
 
-        minio_client.put_object(
-            settings.minio_bucket,
-            storage_path,
-            io.BytesIO(contents),
-            length=len(contents),
-            content_type=mime_type,
-        )
-    except Exception as exc:
-        document.status = "failed"
-        await db.commit()
+            storage_path = f"{document.id}{extension}"
+            try:
+                await run_in_threadpool(_store_object, storage_path, file.file, size, mime_type)
+            except Exception as exc:
+                document.status = "failed"
+                await db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Can not upload file {filename}: {exc}",
+                ) from exc
+
+            document.storage_path = storage_path
+            await db.commit()
+    except SlotTimeout as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Can not upload file {filename}: {exc}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The server is busy handling other uploads. Please try again in a moment.",
+            headers={"Retry-After": "5"},
         ) from exc
 
-    document.storage_path = storage_path
-    await db.commit()
-
     # Pass owner_id to Celery so the worker can store it in every Qdrant point.
-    # .delay() là một lệnh gọi mạng đồng bộ tới Redis broker: chạy trong threadpool, và nếu
-    # broker lỗi thì báo 503 rõ ràng (trước đây: 500 sau khi file đã lưu, document kẹt "pending").
+    # .delay() makes a synchronous network call to the Redis broker: run it in a thread pool, and
+    # return a clear 503 if the broker fails (previously: 500 after the file was saved, leaving the document "pending").
     try:
         await run_in_threadpool(
             task_process_document.delay,
-            str(document.id), storage_path, mime_type, str(current_user.id),
+            str(document.id), storage_path, mime_type, str(owner_id),
         )
     except Exception as exc:
         logger.exception("Could not enqueue processing for document %s", document.id)
@@ -178,11 +223,9 @@ async def get_document_status(
     }
 
 
-# ---------------------------------------------------------------------------
-# Liệt kê & xóa tài liệu
-# ---------------------------------------------------------------------------
+# List & delete documents
 LIST_LIMIT = 200
-# Tài liệu "pending" lâu hơn mức này coi như worker đã chết giữa chừng => cho phép xóa để khỏi kẹt mãi.
+# A document left "pending" longer than this is assumed to have been abandoned by a worker -> allow deletion to unblock it.
 STUCK_PENDING_AFTER = timedelta(minutes=30)
 
 
@@ -247,7 +290,7 @@ async def delete_document(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
 
     if document.status == "pending" and _is_recent(document.created_at):
-        # Worker đang nhúng: xóa lúc này sẽ để lại vector mồ côi được ghi sau đó.
+        # The worker is embedding this document: deleting it now would leave orphaned vectors written afterward.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Document is still being processed. Please try again in a moment.",
@@ -264,18 +307,18 @@ async def delete_document(
         ) from exc
 
     storage_path = document.storage_path
-    # Giữ lịch sử làm quiz / hội thoại, chỉ gỡ liên kết tới tài liệu (không phụ thuộc ON DELETE của DB).
+    # Keep quiz/conversation history and only remove the document link (do not depend on database ON DELETE behavior).
     await db.execute(update(QuizAttempt).where(QuizAttempt.document_id == document.id).values(document_id=None))
     await db.execute(update(Conversation).where(Conversation.document_id == document.id).values(document_id=None))
-    # Câu lệnh DELETE trực tiếp (không qua ORM) để SQLAlchemy không lazy-load các quan hệ của Document
-    # — điều không được phép trong phiên async.
+    # Use a direct DELETE statement (not the ORM) so SQLAlchemy does not lazy-load Document relationships,
+    # which is not allowed in an async session.
     await db.execute(delete(Document).where(Document.id == document.id))
     await db.commit()
 
     if storage_path:
         try:
             await run_in_threadpool(minio_client.remove_object, settings.minio_bucket, storage_path)
-        except Exception:  # noqa: BLE001 - bản ghi đã xóa; file mồ côi không gây hại, chỉ cần ghi log
+        except Exception:  # noqa: BLE001 - The record is already deleted; an orphaned file is harmless, just log it.
             logger.warning("Could not remove object %s from MinIO", storage_path, exc_info=True)
 
     await semantic_cache.invalidate_owner(owner_id)

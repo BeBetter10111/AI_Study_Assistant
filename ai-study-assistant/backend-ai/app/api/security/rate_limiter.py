@@ -59,17 +59,17 @@ limiter = Limiter(
     key_func=_get_user_or_ip,
     storage_uri=settings.redis_url,
     default_limits=[],          # no blanket default; each endpoint sets its own
-    # PHẢI để False. Với headers_enabled=True, slowapi bắt buộc MỌI endpoint có
-    # @limiter.limit khai báo thêm tham số `response: Response` (khi endpoint trả
-    # về model/dict như TokenResponse). Thiếu tham số đó, slowapi ném
+    # MUST remain False. With headers_enabled=True, slowapi requires EVERY endpoint
+    # using @limiter.limit to declare an additional `response: Response` parameter
+    # (when the endpoint returns a model/dict such as TokenResponse). Without it, slowapi raises
     #   Exception: parameter `response` must be an instance of starlette...Response
-    # SAU KHI endpoint đã chạy xong (user đã được commit vào DB) -> HTTP 500 ->
-    # trình duyệt chỉ báo "Network Error". Khi bị giới hạn, header Retry-After
-    # vẫn được trả về bởi handler RateLimitExceeded trong main.py.
+    # AFTER the endpoint has completed (the user has already been committed to the DB) -> HTTP 500 ->
+    # the browser only reports "Network Error". When a request is rate-limited, the Retry-After header
+    # is still returned by the RateLimitExceeded handler in main.py.
     headers_enabled=False,
-    # Nếu Redis tạm thời không kết nối được, KHÔNG để register/login nổ 500
-    # (frontend sẽ chỉ thấy "Network Error"). Chuyển sang đếm trong bộ nhớ
-    # của tiến trình — giới hạn vẫn còn hiệu lực — và tự quay lại Redis khi
-    # Redis hoạt động trở lại. Lỗi vẫn được ghi log cảnh báo.
+    # If Redis is temporarily unavailable, do NOT let registration/login fail with HTTP 500
+    # (the frontend would only show "Network Error"). Fall back to an in-process counter
+    # so the limit remains active, and automatically return to Redis when it recovers.
+    # The failure is still recorded as a warning in the log.
     in_memory_fallback_enabled=True,
 )

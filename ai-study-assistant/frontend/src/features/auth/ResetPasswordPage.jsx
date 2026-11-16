@@ -4,9 +4,9 @@ import { authStyles as styles } from "./authStyles";
 import AuthFooterLinks from "./AuthFooterLinks";
 
 const MIN_LENGTH = 8;
-const MAX_BYTES = 72; // giới hạn của bcrypt, khớp backend
+const MAX_BYTES = 72; // bcrypt limit, matching the backend.
 
-// Bước 3: đặt mật khẩu mới (chỉ vào được sau khi mã đã được xác nhận).
+// Step 3: set a new password (accessible only after the code has been verified).
 export default function ResetPasswordPage({ resetToken, onSuccess, onSessionExpired, onGoLogin, onGoSignup }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -38,7 +38,7 @@ export default function ResetPasswordPage({ resetToken, onSuccess, onSessionExpi
     } catch (err) {
       const detail = err.response?.data?.detail;
       const message = Array.isArray(detail) ? detail[0]?.msg : detail;
-      // Phiên reset hết hạn / mã đã dùng -> quay lại bước 1.
+      // Reset session expired / code already used -> return to step 1.
       if (err.response?.status === 400 && /session/i.test(message || "")) {
         onSessionExpired(message);
         return;

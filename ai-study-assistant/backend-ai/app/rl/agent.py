@@ -51,12 +51,12 @@ async def update_state(user_id: str, quiz_result: dict[str, Any], db: AsyncSessi
 
     reward = compute_reward(is_correct, response_time_s, hints_used)
 
-    # Load state hiện tại
+    # Load the current state
     state = await load_state(user_id, db)
     history: list[float] = state.get("reward_history", [])
     history.append(reward)
 
-    # Cập nhật difficulty_index theo ngưỡng
+    # Update difficulty_index based on the thresholds
     idx: int = state.get("difficulty_index", 0)
     if reward >= PROMOTE_THRESHOLD:
         idx = min(idx + 1, len(DIFFICULTY_LEVELS) - 1)

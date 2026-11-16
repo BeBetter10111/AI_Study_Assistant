@@ -20,14 +20,12 @@ class Settings(BaseSettings):
     gpu_memory_utilization: float = 0.85
 
     ollama_base_url: str = "http://host.docker.internal:11434"
-    ollama_model_name: str = "qwen2.5:3b"
+    ollama_model_name: str = "qwen2.5:7b"
     ollama_num_ctx: int = 8192
     ollama_timeout_s: float = 300.0
 
     max_response_latency_ms: int = 800
     jwt_secret: str = "change-me"
-    # "production" (mặc định, an toàn): JWT_SECRET yếu/mặc định => backend KHÔNG khởi động.
-    # Đặt APP_ENV=development để chạy thử với secret yếu (chỉ in cảnh báo).
     app_env: str = "production"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
@@ -43,9 +41,9 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: str = ""
-    smtp_from: str = ""            # e.g. "AI Study Assistant <no-reply@example.com>"
-    smtp_use_starttls: bool = True  # port 587
-    smtp_use_ssl: bool = False      # port 465 (implicit TLS)
+    smtp_from: str = ""            
+    smtp_use_starttls: bool = True  
+    smtp_use_ssl: bool = False      
 
     # RAG retrieval tuning
     # Candidates fetched PER LEG (dense and BM25) before fusion.
@@ -66,27 +64,45 @@ class Settings(BaseSettings):
     # Final score = w * rerank + (1 - w) * fusion (both min-max normalised).
     rag_rerank_weight: float = 0.7
 
-    # --- Mô hình embedding / re-ranker: ONNX Runtime INT8 
-    # Tên model gốc (HuggingFace). Đổi embedding model => phải re-ingest tài liệu.
+    # --- Model embedding / re-ranker: ONNX Runtime INT8 
     rag_embedding_model: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-    # Dùng bản ONNX đã lượng tử hóa nếu có file (tạo bằng `python -m scripts.quantize_models`).
-    # Không có file / lỗi tải => TỰ ĐỘNG quay về PyTorch (hành vi cũ), không làm hỏng API.
     rag_onnx_enabled: bool = True
-    rag_onnx_dir: str = "models/onnx"         # tương đối so với /app; nằm trong volume ./backend-ai
-    rag_onnx_precision: str = "int8"          # "int8" (nhanh, nhẹ) hoặc "fp32" (ONNX không lượng tử hóa)
-    rag_onnx_threads: int = 0                 # 0 = để ONNX Runtime tự chọn theo số lõi CPU
-    # Cache LRU cho embedding của câu truy vấn (cùng câu hỏi => khỏi tính lại).
+    rag_onnx_dir: str = "models/onnx"         # Relative to /app; stored in the ./backend-ai volume.
+    rag_onnx_precision: str = "int8"          # "int8" (faster, smaller) or "fp32" (unquantized ONNX).
+    rag_onnx_threads: int = 0                 # 0 = let ONNX Runtime choose based on the number of CPU cores.
+    # LRU cache for query embeddings (repeated questions do not need to be recomputed).
     rag_query_embed_cache_size: int = 256
 
     # --- Redis semantic cache
     semantic_cache_enabled: bool = True
-    # Ngưỡng cosine giữa 2 câu hỏi để coi là "cùng một câu hỏi". Cao = an toàn hơn (ít trúng sai).
+    # Cosine-similarity threshold for treating two questions as the same. Higher = safer (fewer false matches).
     semantic_cache_threshold: float = 0.92
     semantic_cache_ttl_s: int = 24 * 3600
-    semantic_cache_max_entries: int = 200     # tối đa mỗi phạm vi (user + tài liệu + intent + top_k)
-    semantic_cache_timeout_s: float = 0.5     # Redis chậm/chết => bỏ qua cache, KHÔNG làm chậm chat
-    # Heartbeat SSE (giây) khi chờ token đầu tiên, tránh proxy cắt kết nối "im lặng".
+    semantic_cache_max_entries: int = 200     # Maximum per scope (user + document + intent + top_k).
+    semantic_cache_timeout_s: float = 0.5     # If Redis is slow/unavailable, skip the cache; do NOT slow down chat.
+    # SSE heartbeat interval (seconds) while waiting for the first token, to prevent proxies from closing an idle connection.
     sse_heartbeat_s: float = 15.0
+
+    # --- Load limits / abuse prevention
+    # Maximum concurrent Q&A requests per user (exceeding this returns 429). Each stream holds one thread.
+    max_concurrent_requests_per_user: int = 2
+    # Maximum concurrent LLM calls across the backend (chat, quiz, etc.). When exceeded, report "busy" instead of queuing
+    # indefinitely, exhausting the thread pool (default 40) and blocking logins. 0 = unlimited.
+    max_concurrent_generations: int = 4
+    # Upload: concurrent MinIO writes, maximum wait time for a slot, and per-user limits.
+    max_concurrent_uploads: int = 3
+    upload_slot_wait_s: float = 30.0
+    max_documents_per_user: int = 1000
+    max_storage_per_user_mb: int = 3 * 1024
+    # Login: after this many FAILED attempts in the window, soft-lock the account — allow at most one attempt
+    # every `login_soft_lock_interval_s` seconds (from any IP). A successful login clears the counter. 0 = disabled.
+    login_fail_threshold: int = 8
+    login_fail_window_s: int = 900
+    login_soft_lock_interval_s: int = 15
+    #Each user can have at most this many conversations, and each conversation can have at most this many messages. Conversations that are empty for more than `empty_conversation_ttl_s` seconds will be purged automatically.
+    max_conversations_per_user: int = 500
+    max_messages_per_conversation: int = 500
+    empty_conversation_ttl_s: int = 24 * 3600
 
     allowed_origins: str = "http://localhost:5173"
 

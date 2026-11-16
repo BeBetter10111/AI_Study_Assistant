@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-// Hộp thoại xác nhận. Focus mặc định rơi vào nút "Hủy" để tránh bấm nhầm; Esc hoặc bấm nền để đóng.
+// Confirmation dialog. Focus defaults to "Cancel" to prevent accidental confirmation; press Esc or click the backdrop to close.
 export default function ConfirmDialog({ title, message, confirmLabel, cancelLabel = "Hủy", danger = false, onConfirm, onCancel }) {
   const cancelRef = useRef(null);
 

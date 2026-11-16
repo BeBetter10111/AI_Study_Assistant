@@ -71,7 +71,7 @@ async def test_full_flow_updates_password_and_revokes_old_sessions(app_client, s
     login = await app_client.post("/api/auth/login", json={"identifier": EMAIL, "password": NEW_PW})
     assert login.status_code == 200
 
-    # Token cấp trước khi đổi mật khẩu bị từ chối, token mới dùng được.
+    # A token issued before the password change is rejected; the new token works.
     assert (await _protected_call(app_client, old_access)).status_code == 401
     assert (await _protected_call(app_client, login.json()["access_token"])).status_code == 200
 
@@ -89,7 +89,7 @@ async def test_wrong_code_is_rejected_and_burned_after_max_attempts(app_client, 
     good = sent[0][1]
     for _ in range(5):
         assert (await _verify(app_client, "00000000-0000-0000-0000-000000000000")).status_code == 400
-    assert (await _verify(app_client, good)).status_code == 400  # mã đúng cũng bị khoá
+    assert (await _verify(app_client, good)).status_code == 400  # The correct code is also blocked.
 
 
 async def test_code_is_single_use(app_client, sent):
@@ -136,14 +136,14 @@ async def test_reset_requires_verified_session_and_valid_password(app_client, se
     await _forgot(app_client)
     code = sent[0][1]
 
-    # Access token thường không dùng được làm reset_token.
+    # A regular access token cannot be used as a reset_token.
     assert (await _reset(app_client, access)).status_code == 400
 
     token = (await _verify(app_client, code)).json()["reset_token"]
     assert (await _reset(app_client, token, pw=NEW_PW, confirm="different123")).status_code == 400
     assert (await _reset(app_client, token, pw="short")).status_code == 422
-    assert (await _reset(app_client, token, pw=OLD_PW)).status_code == 400  # trùng mật khẩu cũ
-    assert (await _reset(app_client, token)).status_code == 200  # token vẫn dùng được sau các lỗi trên
+    assert (await _reset(app_client, token, pw=OLD_PW)).status_code == 400  # Same as the old password.
+    assert (await _reset(app_client, token)).status_code == 200  # The token still works after the errors above.
 
 
 async def test_reset_token_cannot_be_used_as_access_token(app_client, sent):

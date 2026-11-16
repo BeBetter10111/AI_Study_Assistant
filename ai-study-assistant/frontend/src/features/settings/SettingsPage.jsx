@@ -8,7 +8,7 @@ const THEMES = [
   { key: "system", label: "Theo hệ thống" },
 ];
 
-const MAX_PASSWORD_BYTES = 72; // giới hạn của bcrypt, khớp với backend
+const MAX_PASSWORD_BYTES = 72; // bcrypt limit, matching the backend.
 
 const EMPTY_FORM = { current: "", next: "", confirm: "" };
 

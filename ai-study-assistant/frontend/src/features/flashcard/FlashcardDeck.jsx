@@ -52,7 +52,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
   const handleRate = (levelKey) => {
     setRecallCounts((prev) => ({ ...prev, [levelKey]: (prev[levelKey] || 0) + 1 }));
 
-    // Luôn sang thẻ kế tiếp; chấm thẻ cuối cùng chuyển sang màn hình tổng kết.
+    // Always advance to the next card; rating the last card opens the summary screen.
     setCurrentIndex((prev) => prev + 1);
     setIsFlipped(false);
   };

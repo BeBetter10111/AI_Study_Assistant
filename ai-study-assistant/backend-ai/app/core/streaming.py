@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
-# Dòng comment SSE: EventSource/parsers bỏ qua nó, nhưng nó giữ cho kết nối "sống".
+# An SSE comment line: EventSource/parsers ignore it, but it keeps the connection alive.
 SSE_KEEPALIVE = ": keep-alive\n\n"
 
 
@@ -44,17 +44,17 @@ class Done:
 def _close_quietly(gen: Iterator) -> None:
     try:
         gen.close()
-    except Exception:  # noqa: BLE001 - dọn dẹp, không được ném lỗi
+    except Exception:  # noqa: BLE001 - Cleanup must not raise an error.
         logger.debug("Closing blocking generator failed", exc_info=True)
 
 
 async def aiter_blocking(gen: Iterator, heartbeat_s: Optional[float] = None) -> AsyncIterator[Any]:
     """Duyệt một generator ĐỒNG BỘ (có thể chặn lâu) từ code async.
 
-    * Mỗi ``next()`` chạy trong thread pool nên không chặn event loop.
-    * Nếu vòng lặp bị hủy / dừng sớm / có lỗi, generator được ``close()`` => ``with httpx.stream(...)``
+    * Each ``next()`` runs in a thread pool so it does not block the event loop.
+    * If the loop is cancelled, stopped early, or errors, the generator is ``close()``d => ``with httpx.stream(...)``
       bên trong nó thoát và kết nối tới Ollama bị đóng.
-    * Nếu ``heartbeat_s`` được đặt, yield ``HEARTBEAT`` mỗi ``heartbeat_s`` giây khi đang chờ phần tử kế.
+    * If ``heartbeat_s`` is set, yield ``HEARTBEAT`` every ``heartbeat_s`` seconds while waiting for the next item.
     """
     end = object()
     pending: Optional[asyncio.Future] = None
@@ -73,8 +73,8 @@ async def aiter_blocking(gen: Iterator, heartbeat_s: Optional[float] = None) -> 
             yield item
     finally:
         if pending is not None and not pending.done():
-            # Một next() vẫn đang chạy trong thread (không hủy được giữa chừng): đóng generator
-            # ngay khi nó xong, vì close() lên generator đang chạy sẽ lỗi.
+            # A next() call is still running in a thread (it cannot be cancelled mid-call):
+            # close the generator as soon as it finishes, since closing a running generator raises an error.
             pending.add_done_callback(lambda _fut: _close_quietly(gen))
         else:
             _close_quietly(gen)

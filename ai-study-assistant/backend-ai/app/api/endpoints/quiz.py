@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
+from app.core.concurrency import llm_slot, user_request
 from app.core.llm_engine import llm_engine
 from app.models.models import Document, QuizAttempt, User
 from app.rag.vector_store import vector_store
@@ -38,9 +39,9 @@ class GenerateQuizRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     num_questions: int = Field(default=10, ge=1, le=50)
     document_id: Optional[str] = None
-    # difficulty có thể được client gợi ý, nhưng backend luôn ưu tiên
-    # giá trị đọc từ RL state. Trường này chỉ là fallback khi user chưa có
-    # lịch sử (mặc định "medium").
+    # The client may suggest a difficulty, but the backend always prioritizes
+    # the value read from the RL state. This field is only a fallback when the user has no
+    # history (default "medium").
     difficulty: Optional[str] = Field(default=None, pattern=r"^(easy|medium|hard)$")
 
 
@@ -48,7 +49,7 @@ class GenerateQuizResponse(BaseModel):
     quiz_id: str
     topic: str
     questions: List[QuizQuestion]
-    difficulty: str  # độ khó đã được áp dụng — để frontend hiển thị
+    difficulty: str  # Applied difficulty — displayed by the frontend.
 
 
 class SubmitQuizRequest(BaseModel):
@@ -60,7 +61,7 @@ class SubmitQuizRequest(BaseModel):
 
 class SubmitQuizResponse(BaseModel):
     attempt_id: str
-    next_difficulty: str  # độ khó cho bài tiếp theo — frontend dùng để hiển thị
+    next_difficulty: str  # Difficulty for the next quiz — displayed by the frontend.
 
 
 # ---------------------------------------------------------------------------
@@ -97,16 +98,22 @@ async def generate_quiz(
     current_user: User = Depends(get_current_user),
 ):
     """Sinh bộ câu hỏi theo độ khó phù hợp với trình độ hiện tại của user."""
-    # 1) Lấy difficulty từ RL state của user (backend-authoritative)
+    # Limit the number of concurrent resource-intensive requests per user (see app/core/concurrency.py).
+    with user_request(str(current_user.id)):
+        return await _generate_quiz(payload, db, current_user)
+
+
+async def _generate_quiz(payload: GenerateQuizRequest, db: AsyncSession, current_user: User):
+    # 1) Get the user's difficulty from the RL state (backend-authoritative)
     rl_difficulty = await rl_agent.get_current_difficulty(
         user_id=str(current_user.id), db=db
     )
-    # Nếu client gợi ý difficulty và user chưa có lịch sử (index=0, default easy),
-    # ưu tiên RL state — không cho client override để tránh gian lận độ khó.
+    # If the client suggests a difficulty and the user has no history (index=0, default easy),
+    # prioritize the RL state — do not let the client override it and game the difficulty.
     difficulty = rl_difficulty
 
-    # 2) Lấy context từ vector store — scoped to the authenticated user's documents
-    #    Threadpool: tránh chặn event loop bằng embedding/Qdrant/re-ranker (xem chat.py).
+    # 2) Get context from the vector store — scoped to the authenticated user's documents
+    #    Use a thread pool to avoid blocking the event loop with embedding/Qdrant/re-ranker work (see chat.py).
     hits = await run_in_threadpool(
         vector_store.search_similar_chunks,
         query=payload.topic, limit=8,
@@ -137,9 +144,12 @@ async def generate_quiz(
     )
 
     try:
-        result = await run_in_threadpool(
-            llm_engine.generate_structured_output, prompt=prompt, schema_class=QuizSchema
-        )
+        with llm_slot():  # No slot available => 429 "busy" (HTTPException passes through the `except Exception` below).
+            result = await run_in_threadpool(
+                llm_engine.generate_structured_output, prompt=prompt, schema_class=QuizSchema
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Error generating quiz: %s", exc)
         raise HTTPException(
@@ -188,8 +198,8 @@ async def submit_quiz_result(
             detail="quiz_id hoặc document_id không hợp lệ.",
         ) from exc
 
-    # document_id phải là tài liệu CỦA user này. Trước đây id lạ làm vi phạm khoá ngoại
-    # ở Postgres -> HTTP 500, và có thể gắn lượt làm bài vào tài liệu của người khác.
+    # document_id must refer to this user's document. Previously, an unknown ID violated the Postgres foreign key
+    # -> HTTP 500, and could associate an attempt with another user's document.
     if document_uuid is not None:
         owned = await db.execute(
             select(Document.id).where(
@@ -201,7 +211,7 @@ async def submit_quiz_result(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Document not found."
             )
 
-    # Lưu attempt vào DB
+    # Save the attempt to the DB
     attempt = QuizAttempt(
         user_id=current_user.id,
         document_id=document_uuid,
@@ -214,7 +224,7 @@ async def submit_quiz_result(
     await db.commit()
     await db.refresh(attempt)
 
-    # Cập nhật RL state (async, persistent)
+    # Update the RL state (async, persistent)
     next_difficulty = await rl_agent.update_state(
         user_id=str(current_user.id),
         quiz_result={

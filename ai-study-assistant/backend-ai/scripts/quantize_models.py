@@ -1,22 +1,22 @@
-"""Xuất model Embedding + Re-ranker sang ONNX và lượng tử hóa INT8, rồi ĐO độ lệch so với bản gốc.
+"""Export the embedding model + re-ranker to ONNX, quantize to INT8, and MEASURE the difference from the original.
 
-Chạy MỘT LẦN (trong container backend, cần mạng để tải model từ HuggingFace):
+Run ONCE (inside the backend container; network access is required to download models from Hugging Face):
 
     docker compose exec backend-ai python -m scripts.quantize_models
 
-Kết quả nằm ở ``models/onnx/<tên-model>/`` (nằm trong volume ./backend-ai nên còn sau khi restart).
-Backend tự dùng bản ONNX khi file tồn tại; xóa thư mục đó (hoặc đặt RAG_ONNX_ENABLED=false) để
-quay về PyTorch.
+Results are stored in ``models/onnx/<model-name>/`` (inside the ./backend-ai volume, so they persist after restart).
+The backend uses the ONNX version when its files exist; delete that directory (or set RAG_ONNX_ENABLED=false) to
+fall back to PyTorch.
 
-Script KHÔNG chỉ "xuất file": nó so sánh bản INT8 với bản PyTorch gốc trên các câu mẫu tiếng Việt/Anh
-và in ra:
-  * embedding: cosine trung bình / thấp nhất giữa vector gốc và vector INT8
-  * re-ranker: tương quan hạng (Spearman) và tỉ lệ trùng top-1
-  * tốc độ: thời gian trung vị mỗi lần gọi, PyTorch vs ONNX INT8
-Nếu chất lượng thấp hơn ngưỡng, script thoát với mã 2 và in cảnh báo — đừng dùng bản INT8 đó.
+The script does more than "export files": it compares the INT8 version with the original PyTorch version using
+sample Vietnamese/English sentences and reports:
+  * embedding: mean / minimum cosine similarity between the original and INT8 vectors
+  * re-ranker: rank correlation (Spearman) and top-1 agreement
+  * speed: median time per call, PyTorch vs ONNX INT8
+If quality falls below the threshold, the script exits with code 2 and prints a warning — do not use that INT8 version.
 
-Lưu ý: đổi embedding sang INT8 làm vector lệch nhẹ so với vector đã lưu trong Qdrant (tính bằng fp32).
-Truy vấn vẫn hoạt động, nhưng để chính xác nhất hãy upload lại tài liệu sau khi bật INT8.
+Note: switching embeddings to INT8 causes a small difference from vectors already stored in Qdrant (computed in fp32).
+Queries still work, but for maximum accuracy, re-upload documents after enabling INT8.
 """
 from __future__ import annotations
 
@@ -84,14 +84,14 @@ RERANK_SETS: List[Tuple[str, List[str]]] = [
 
 
 # --------------------------------------------------------------------------------------
-# Xuất ONNX + lượng tử hóa
+# ONNX export + quantization
 # --------------------------------------------------------------------------------------
 def _load_hf(name: str, kind: str):
     from transformers import AutoModel, AutoModelForSequenceClassification, AutoTokenizer
 
     auto = AutoModel if kind == "embedding" else AutoModelForSequenceClassification
     tokenizer = AutoTokenizer.from_pretrained(name)
-    try:  # attention "eager" xuất ONNX ổn định hơn SDPA
+    try:  # "eager" attention exports to ONNX more reliably than SDPA.
         model = auto.from_pretrained(name, attn_implementation="eager")
     except (TypeError, ValueError):
         model = auto.from_pretrained(name)
@@ -136,7 +136,7 @@ def quantize_int8(src: Path, dst: Path, reduce_range: bool, quantize_gather: boo
     from onnxruntime.quantization import QuantType, quantize_dynamic
 
     prepared = src
-    try:  # tiền xử lý (shape inference) giúp lượng tử hóa chính xác hơn; không bắt buộc
+    try:  # Preprocessing (shape inference) improves quantization accuracy; optional.
         from onnxruntime.quantization.shape_inference import quant_pre_process
 
         prepared = src.with_suffix(".pre.onnx")
@@ -145,8 +145,8 @@ def quantize_int8(src: Path, dst: Path, reduce_range: bool, quantize_gather: boo
         print(f"  (bỏ qua bước pre-process: {exc})")
         prepared = src
 
-    # Mặc định chỉ lượng tử hóa MatMul/Gemm (các lớp attention + FFN) — phần quyết định tốc độ.
-    # Bảng embedding từ (Gather) giữ fp32 để không làm lệch vector; bật --quantize-gather để giảm RAM.
+    # By default, quantize only MatMul/Gemm (attention + FFN layers), which determine performance.
+    # Keep the token embedding table (Gather) in fp32 to avoid shifting vectors; enable --quantize-gather to reduce RAM.
     ops = ["MatMul", "Gemm"] + (["Gather"] if quantize_gather else [])
     quantize_dynamic(
         model_input=str(prepared), model_output=str(dst),
@@ -158,10 +158,10 @@ def quantize_int8(src: Path, dst: Path, reduce_range: bool, quantize_gather: boo
 
 
 # --------------------------------------------------------------------------------------
-# Tham chiếu PyTorch + đo
+# PyTorch reference + measurement
 # --------------------------------------------------------------------------------------
 class _TorchEmbedRef:
-    """Tham chiếu: sentence-transformers nếu có (đúng như backend đang chạy), không thì mean pooling thủ công."""
+    """Reference: use sentence-transformers if available (matching the backend); otherwise, use manual mean pooling."""
 
     def __init__(self, name: str, model, tokenizer, max_length: int):
         self.max_length = max_length
@@ -233,7 +233,7 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _median_ms(fn, repeat: int = 5) -> float:
-    fn()  # khởi động
+    fn()  # Warm up.
     times = []
     for _ in range(repeat):
         start = time.perf_counter()
@@ -264,7 +264,7 @@ def verify_reranker(ref: _TorchRerankRef, runtime: onnx_models.OnnxCrossEncoder)
         rhos.append(_spearman(want, got))
         top1.append(int(np.argmax(want) == np.argmax(got)))
         diffs.append(float(np.abs(want - got).max()))
-    pairs = [(RERANK_SETS[0][0], p) for p in RERANK_SETS[0][1]] * 3  # ~18 cặp, gần với rerank_top_n
+    pairs = [(RERANK_SETS[0][0], p) for p in RERANK_SETS[0][1]] * 3  # ~18 pairs, close to rerank_top_n.
     return {
         "reference": ref.kind,
         "spearman_mean": float(np.mean(rhos)),
@@ -282,7 +282,7 @@ def process(kind: str, name: str, out_root: Path, args) -> bool:
     model, tokenizer = _load_hf(name, kind)
     ref = (_TorchEmbedRef if kind == "embedding" else _TorchRerankRef)(name, model, tokenizer, max_length)
     if kind == "embedding":
-        max_length = ref.max_length  # theo cấu hình của sentence-transformers (128 với mpnet-multilingual)
+        max_length = ref.max_length  # From the sentence-transformers configuration (128 for mpnet-multilingual).
 
     directory = out_root / onnx_models.safe_model_dirname(name)
     directory.mkdir(parents=True, exist_ok=True)

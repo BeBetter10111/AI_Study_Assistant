@@ -30,8 +30,8 @@ api.interceptors.response.use(
   }
 );
 
-// FastAPI trả `detail` là chuỗi (HTTPException) hoặc MẢNG (lỗi validation 422). Render thẳng mảng
-// object trong JSX làm React crash -> trắng trang, nên luôn đổi về chuỗi.
+// FastAPI returns `detail` as a string (HTTPException) or an ARRAY (422 validation error). Rendering an array
+// of objects directly in JSX crashes React -> blank page, so always convert it to a string.
 const formatDetail = (detail) => {
   if (typeof detail === "string" && detail) return detail;
   if (Array.isArray(detail) && detail.length) {
@@ -80,7 +80,7 @@ export const changePassword = (currentPassword, newPassword, confirmPassword) =>
     confirm_password: confirmPassword,
   });
 
-// Tài liệu và lịch sử hội thoại lưu ở server: danh sách khôi phục được sau khi tải lại trang.
+// Documents and conversation history are stored on the server, so lists can be restored after a page reload.
 export const listDocuments = () => api.get("/documents");
 
 export const deleteDocument = (id) => api.delete(`/documents/${id}`);
@@ -141,7 +141,7 @@ const parseSseFrame = (frame) => {
 };
 
 // options: { topK, history: [{role, content}], signal: AbortSignal }
-// Truyền `signal` để huỷ giữa chừng (nút "Dừng"): server thấy kết nối đóng và dừng sinh câu trả lời.
+// Pass `signal` to cancel mid-request ("Stop" button): the server detects the closed connection and stops generating the answer.
 export const askQuestionStream = async (
   question,
   documentId,
@@ -162,7 +162,7 @@ export const askQuestionStream = async (
       document_id: documentId,
       top_k: topK,
       history,
-      // Có conversation_id: server lưu tin nhắn và tự lấy lịch sử từ DB (bỏ qua `history` ở trên).
+      // When conversation_id is present, the server saves the message and loads history from the DB (ignoring `history` above).
       ...(conversationId ? { conversation_id: conversationId } : {}),
     }),
   });
@@ -196,5 +196,5 @@ export const askQuestionStream = async (
     flush(frames);
   }
   buffer += decoder.decode();
-  if (buffer.trim()) flush([buffer]); // frame cuối không có dòng trống kết thúc
+  if (buffer.trim()) flush([buffer]); // The final frame has no trailing blank line.
 };

@@ -21,12 +21,12 @@ export const setThemePreference = (pref) => {
     if (pref === "system") localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, pref);
   } catch {
-    /* localStorage không dùng được: vẫn áp dụng cho phiên hiện tại */
+    /* If localStorage is unavailable, still apply the theme for the current session. */
   }
   applyTheme(pref);
 };
 
-// Gọi một lần khi khởi động: theo dõi thay đổi giao diện của hệ điều hành khi chọn "system".
+// Call once at startup: watch for operating-system theme changes when "system" is selected.
 export const initTheme = () => {
   applyTheme(getThemePreference());
   query().addEventListener("change", () => {

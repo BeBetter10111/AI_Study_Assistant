@@ -31,9 +31,9 @@ export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả
   const [score, setScore] = useState(0);
 
   
-  // Độ khó hiện tại (được backend xác định theo RL state của user)
+  // Current difficulty (determined by the backend from the user's RL state)
   const [currentDifficulty, setCurrentDifficulty] = useState(null);
-  // Độ khó tiếp theo (nhận về sau mỗi lần submit — dùng để hiển thị thông báo)
+  // Next difficulty (returned after each submission and used to display a notification)
   const [nextDifficulty, setNextDifficulty] = useState(null);
 
   const handleGenerate = async () => {
@@ -43,7 +43,7 @@ export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả
     setErrorMessage(null);
     setNextDifficulty(null);
     try {
-      // Backend tự quyết định difficulty từ RL state — không cần client truyền lên
+      // The backend determines difficulty from the RL state — the client does not need to send it.
       const response = await generateQuiz(topic.trim(), numQuestions, documentId);
       const { quiz_id, questions: generatedQuestions, difficulty } = response.data;
 
@@ -53,7 +53,7 @@ export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả
 
       setQuizId(quiz_id);
       setQuestions(generatedQuestions);
-      setCurrentDifficulty(difficulty);   // ← lưu difficulty backend đã chọn
+      setCurrentDifficulty(difficulty);   // ← Save the difficulty selected by the backend.
       setCurrentIndex(0);
       setScore(0);
       setSelectedOption(null);
@@ -99,7 +99,7 @@ export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả
         response_time_s: responseTimeS,
         hints_used: hintsUsedThisQuestion,
       });
-      // ← Lưu next_difficulty để hiển thị phản hồi cho user
+      // ← Save next_difficulty to display feedback to the user.
       if (res.data?.next_difficulty) {
         setNextDifficulty(res.data.next_difficulty);
       }
@@ -286,7 +286,7 @@ export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả
       {isAnswerRevealed && (
         <>
           <p className="explain">{currentQuestion.explanation}</p>
-          {/* Hiển thị phản hồi RL ngay sau khi submit câu */}
+          {/* Show RL feedback immediately after submitting an answer. */}
           {nextDifficulty && (
             <p className="field-hint" style={{ marginTop: 10 }}>
               {nextDifficulty === currentDifficulty
@@ -324,5 +324,5 @@ export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả
   );
 }
 
-// Tham chiếu nội bộ cho tính toán hướng difficulty (tránh import vòng)
+// Internal reference for calculating the difficulty direction (avoids a circular import).
 const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];

@@ -87,8 +87,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./backend-ai:/app
-      # Backend chạy bằng user thường (uid 10001): các thư mục cần GHI (model ONNX, cache HuggingFace) là named
-      # volume nằm ngoài /app, luôn ghi được và còn nguyên sau khi tạo lại container. Dùng chung cho API + worker.
+      # The backend runs as an unprivileged user (uid 10001): writable directories (ONNX models, Hugging Face cache) are named
+      # volumes outside /app, remain writable and persist when the container is recreated. Shared by the API and worker.
       - onnx_models:/home/app/models
       - hf_cache:/home/app/.cache/huggingface
     healthcheck:

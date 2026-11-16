@@ -8,7 +8,7 @@ PW = "firstpassword1"
 
 @pytest.fixture(autouse=True)
 def _no_rate_limit(monkeypatch):
-    # Bộ đếm rate limit dùng chung giữa các test (Redis không có trong CI -> đếm trong bộ nhớ).
+    # The rate-limit counter is shared across tests (Redis is unavailable in CI -> use the in-memory counter).
     monkeypatch.setattr(limiter, "enabled", False)
 
 
@@ -43,7 +43,7 @@ async def test_patch_updates_only_sent_fields_and_can_clear(app_client):
     res = await app_client.patch("/api/auth/me", headers=headers, json={"full_name": "  Alice Nguyen  "})
     assert res.status_code == 200
     assert res.json()["full_name"] == "Alice Nguyen"
-    assert res.json()["phone"] == "0900000001"  # không gửi -> giữ nguyên
+    assert res.json()["phone"] == "0900000001"  # Not submitted -> unchanged.
 
     res = await app_client.patch("/api/auth/me", headers=headers, json={"phone": ""})
     assert res.status_code == 200
@@ -74,7 +74,7 @@ async def test_patch_rejects_taken_username_and_phone(app_client):
     res = await app_client.patch("/api/auth/me", headers=headers, json={"phone": "0911111111"})
     assert res.status_code == 409
 
-    # Đặt lại đúng username hiện tại không phải xung đột với chính mình.
+    # Setting the username to its current value is not a conflict with itself.
     res = await app_client.patch("/api/auth/me", headers=headers, json={"username": "alice"})
     assert res.status_code == 200
 
@@ -117,7 +117,7 @@ async def test_change_password_flow(app_client):
     assert ok.status_code == 200
     new_headers = {"Authorization": f"Bearer {ok.json()['access_token']}"}
 
-    # Token cũ bị thu hồi, token mới dùng được.
+    # The old token is revoked; the new token works.
     assert (await app_client.get("/api/auth/me", headers=headers)).status_code == 401
     assert (await app_client.get("/api/auth/me", headers=new_headers)).status_code == 200
 

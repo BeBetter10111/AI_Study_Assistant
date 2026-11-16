@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import Icon from "../../components/Icons";
-import { askQuestionStream, createConversation } from "../../services/api";
+import { askQuestionStream, createConversation, getErrorMessage } from "../../services/api";
 
-// conversationId / initialMessages: hội thoại đã lưu (null + [] = cuộc trò chuyện mới). App đổi `key` của
-// component này khi người dùng mở hội thoại khác, nên các giá trị này chỉ cần đọc lúc khởi tạo.
+// conversationId / initialMessages: saved conversation (null + [] = new conversation). App changes this component's `key`
+// when the user opens a different conversation, so these values only need to be read during initialization.
 export default function ChatWindow({
   documentId = null,
   scopeLabel = "Tất cả tài liệu",
@@ -24,7 +24,7 @@ export default function ChatWindow({
   const wasLoading = useRef(false);
   const abortRef = useRef(null);
 
-  // Ô nhập tự cao lên theo nội dung (tối đa ~6 dòng).
+  // The input grows with its content (up to ~6 lines).
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -32,7 +32,7 @@ export default function ChatWindow({
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
   }, [input]);
 
-  // Luôn cuộn tới tin mới nhất; trả lại focus cho ô nhập khi trợ lý trả lời xong.
+  // Always scroll to the latest message; return focus to the input when the assistant finishes responding.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -45,8 +45,8 @@ export default function ChatWindow({
     wasLoading.current = isLoading;
   }, [isLoading]);
 
-  // Lịch sử gửi kèm để server viết lại câu hỏi nối tiếp ("còn cái đó thì sao?") thành câu hỏi độc lập.
-  // Chỉ lấy các lượt đã hoàn chỉnh, tối đa 6 tin gần nhất.
+  // Include history so the server can rewrite follow-up questions ("what about that?") as standalone questions.
+  // Include only completed turns, up to the 6 most recent messages.
   const buildHistory = () =>
     messages
       .filter((m) => m.content && !m.partial)
@@ -63,9 +63,10 @@ export default function ChatWindow({
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Hội thoại mới được tạo (ở server) ngay khi gửi câu đầu tiên. Nếu tạo lỗi thì vẫn chat được,
-    // chỉ là lần này không được lưu lại.
+    // A new conversation is created on the server when the first message is sent. If creation fails, chat still works,
+    // but this conversation will not be saved.
     let activeConversation = conversationRef.current;
+    let saveWarning = null;
     if (!activeConversation) {
       try {
         const created = await createConversation(documentId);
@@ -74,6 +75,10 @@ export default function ChatWindow({
         onConversationCreated(activeConversation);
       } catch (err) {
         console.warn("Could not create a conversation; this chat will not be saved:", err?.message);
+        // Conversation limit reached (403): the assistant can still respond, but explain why this conversation was not saved.
+        if (err?.response?.status === 403) {
+          saveWarning = `${getErrorMessage(err, "")} Cuộc trò chuyện này sẽ không được lưu.`.trim();
+        }
       }
     }
 
@@ -81,7 +86,7 @@ export default function ChatWindow({
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
-    setError(null);
+    setError(saveWarning);
     setSteps([]);
 
     let collected = [];
@@ -93,7 +98,7 @@ export default function ChatWindow({
       collected = i === -1 ? [...collected, step] : collected.map((s, j) => (j === i ? step : s));
       setSteps(collected);
     };
-    // Câu trả lời đang stream dở mà bị dừng / lỗi: giữ lại phần đã nhận và đánh dấu "chưa hoàn chỉnh".
+    // If a streamed answer is stopped / errors, keep the received portion and mark it as "incomplete".
     const markPartial = () => {
       if (!streamingStarted) return;
       setMessages((prev) => {
@@ -141,7 +146,7 @@ export default function ChatWindow({
       }
     } catch (err) {
       markPartial();
-      // Người dùng bấm "Dừng": không phải lỗi, chỉ giữ phần đã nhận.
+      // The user clicked "Stop": this is not an error; keep only the received portion.
       if (err?.name !== "AbortError") {
         setError(err.message || "An error occurred while connecting to the AI assistant.");
       }
@@ -149,7 +154,7 @@ export default function ChatWindow({
       abortRef.current = null;
       setIsLoading(false);
       setSteps([]);
-      if (activeConversation) onActivity(); // làm mới danh sách (tiêu đề tự đặt, thứ tự mới nhất)
+      if (activeConversation) onActivity(); // Refresh the list (updated title and most recent ordering).
     }
   };
 

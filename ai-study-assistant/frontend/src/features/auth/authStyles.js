@@ -1,5 +1,5 @@
-// Style dùng chung cho mọi trang đăng nhập / đăng ký / quên mật khẩu.
-// Màu và font lấy từ biến CSS trong src/index.css nên tự đổi theo giao diện sáng/tối.
+// Styles shared by the login / signup / forgot-password pages.
+// Colors and fonts come from CSS variables in src/index.css, so they adapt to the light/dark theme.
 const control = {
   width: "100%",
   height: "40px",

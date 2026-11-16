@@ -4,8 +4,8 @@ import { authStyles as styles } from "./authStyles";
 
 const extractErrorMessage = (err) => {
   if (!err.response) {
-    // Không có response = request không tới được backend hoặc bị CORS chặn.
-    // Hiện rõ URL đã gọi và origin của trang để biết ngay chỗ sai.
+    // No response means the request did not reach the backend or was blocked by CORS.
+    // Show the requested URL and the page origin to make the problem clear.
     const target = api.defaults.baseURL || "(VITE_API_BASE_URL chưa được cấu hình)";
     return (
       `Không thể kết nối tới server (Network Error) tại ${target}. ` +

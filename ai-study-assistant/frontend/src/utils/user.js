@@ -1,8 +1,8 @@
-// Tên hiển thị ưu tiên: họ tên > username > định danh lúc đăng nhập.
+// Display-name priority: full name > username > login identifier.
 export const displayName = (profile, fallback = "") =>
   profile?.full_name?.trim() || profile?.username || fallback || "Tài khoản";
 
-// Chữ cái đầu của từ đầu và từ cuối ("Lê Hồ Chí Hải" -> "LH"); một từ thì lấy tối đa 2 chữ cái.
+// Use the first letters of the first and last words ("Le Ho Chi Hai" -> "LH"); use up to 2 letters for a single word.
 export const initials = (name) => {
   const words = (name || "").trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "?";

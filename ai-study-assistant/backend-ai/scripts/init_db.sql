@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS documents (
     mime_type VARCHAR(128),
     status VARCHAR(32) DEFAULT 'pending',
     storage_path VARCHAR(512),            
+    size_bytes BIGINT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 

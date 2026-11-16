@@ -18,6 +18,7 @@ from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core.email import send_password_reset_email
+from app.core.login_throttle import login_throttle
 from app.models.models import PasswordResetToken, User
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Hash giả để login luôn tốn thời gian bcrypt dù user không tồn tại -> không lộ
-# "tài khoản này có tồn tại không" qua thời gian phản hồi.
+# Dummy hash to ensure login always takes bcrypt time, even when the user does not exist -> do not reveal
+# whether an account exists through response timing.
 _DUMMY_HASH = pwd_context.hash("timing-equalisation-only")
 
 MAX_PASSWORD_LENGTH = 72
@@ -55,7 +56,7 @@ class TokenResponse(BaseModel):
 def _create_access_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.access_token_expire_minutes)
-    payload = {"sub": user_id, "exp": expire, "iat": now.timestamp()}  # float: phân biệt được token cấp trước/sau trong cùng một giây
+    payload = {"sub": user_id, "exp": expire, "iat": now.timestamp()}  # Float: distinguishes tokens issued within the same second.
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -82,7 +83,7 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     # Security: role is ALWAYS forced to the default unprivileged role at public
     # registration — never read from the client payload.  An Admin must use the
     # dedicated admin endpoint (future work) to elevate a user's role.
-    # bcrypt ~100-300ms CPU: chạy trong threadpool để không chặn event loop.
+    # bcrypt takes ~100-300ms of CPU time: run it in a thread pool so it does not block the event loop.
     hashed_password = await run_in_threadpool(pwd_context.hash, payload.password)
     user = User(
         username=payload.username,
@@ -96,8 +97,8 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     try:
         await db.commit()
     except IntegrityError as exc:
-        # Bấm Sign up 2 lần / 2 request song song: cả hai cùng qua bước kiểm tra trùng ở
-        # trên, request thứ hai vi phạm UNIQUE -> trước đây trả 500.
+        # If Sign up is clicked twice / two requests run concurrently, both can pass the duplicate check
+        # above; the second then violates UNIQUE -> previously this returned HTTP 500.
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -111,6 +112,18 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("10/minute")
 async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+    # Soft-lock by ACCOUNT (IP-based rate limiting cannot stop password guessing from multiple IPs). Check BEFORE
+    # verifying the password: a blocked attempt does not reveal whether it was correct, and the same behavior
+    # applies to nonexistent accounts so real accounts are not exposed.
+    wait = await login_throttle.check(payload.identifier)
+    if wait > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed attempts for this account. Please wait {wait} seconds and try again, "
+                   "or reset your password.",
+            headers={"Retry-After": str(wait)},
+        )
+
     # Allow login by either username or email
     result = await db.execute(
         select(User).where(
@@ -122,16 +135,18 @@ async def login(request: Request, payload: LoginRequest, db: AsyncSession = Depe
     stored_hash = user.hashed_password if user is not None else _DUMMY_HASH
     password_ok = await run_in_threadpool(pwd_context.verify, payload.password, stored_hash)
     if user is None or not password_ok:
+        await login_throttle.record_failure(payload.identifier)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Identifier or password is incorrect.",
         )
 
+    await login_throttle.reset(payload.identifier)
     return TokenResponse(access_token=_create_access_token(str(user.id)))
 
 
 # ---------------------------------------------------------------------------
-# Hồ sơ cá nhân & đổi mật khẩu (người dùng đã đăng nhập)
+# User profile & password change (authenticated users)
 # ---------------------------------------------------------------------------
 class UserProfile(BaseModel):
     id: uuid.UUID
@@ -146,8 +161,9 @@ class UserProfile(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    # Chỉ các trường được gửi lên mới bị thay đổi. Email cố ý KHÔNG sửa được ở đây: mã đặt lại
-    # mật khẩu gửi tới email, nên đổi email mà không xác minh = chiếm tài khoản bằng một token bị lộ.
+    # Only submitted fields are changed. Email intentionally cannot be edited here: the password-reset
+    # code is sent to the email address, so changing it without verification could enable account takeover
+    # if a token is exposed.
     username: Optional[str] = Field(default=None, max_length=150)
     full_name: Optional[str] = Field(default=None, max_length=255)
     phone: Optional[str] = Field(default=None, max_length=30)
@@ -212,8 +228,8 @@ async def update_me(
 
     for field, value in changes.items():
         setattr(current_user, field, value)
-    # current_user thuộc session của dependency get_current_user, không phải session `db` ở trên.
-    # merge() đưa nó vào `db` để commit cùng một chỗ.
+    # current_user belongs to the get_current_user dependency's session, not the `db` session above.
+    # merge() attaches it to `db` so everything can be committed together.
     user = await db.merge(current_user)
     try:
         await db.commit()
@@ -249,7 +265,7 @@ async def change_password(
 
     user = await db.merge(current_user)
     user.hashed_password = await run_in_threadpool(pwd_context.hash, payload.new_password)
-    # Mọi JWT cấp trước thời điểm này (kể cả token đang dùng) mất hiệu lực -> trả token mới.
+    # All JWTs issued before this point (including the current token) become invalid -> return a new token.
     user.password_changed_at = _now()
     await db.commit()
 
@@ -285,7 +301,7 @@ class ResetPasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_bytes(cls, v: str) -> str:
-        # bcrypt chỉ đọc 72 byte đầu; ký tự đa byte (tiếng Việt, emoji) có thể vượt giới hạn.
+        # bcrypt only reads the first 72 bytes; multibyte characters (Vietnamese, emoji) can exceed this limit.
         if len(v.encode("utf-8")) > MAX_PASSWORD_LENGTH:
             raise ValueError(f"password must be at most {MAX_PASSWORD_LENGTH} bytes")
         return v
@@ -300,7 +316,7 @@ def _now() -> datetime:
 
 
 def _aware(value: datetime) -> datetime:
-    # SQLite (test) trả về datetime naive; Postgres trả về aware.
+    # SQLite (tests) returns naive datetimes; Postgres returns aware datetimes.
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
@@ -337,7 +353,7 @@ async def forgot_password(
     if latest is not None and latest.created_at is not None:
         age = (now - _aware(latest.created_at)).total_seconds()
         if age < settings.password_reset_resend_cooldown_s:
-            # Chống spam email: bỏ qua im lặng, vẫn trả thông báo chung.
+            # Prevent email spam: silently ignore the request while still returning a generic message.
             return MessageResponse(message=GENERIC_FORGOT_MESSAGE)
 
     await db.execute(

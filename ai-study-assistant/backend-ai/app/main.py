@@ -15,8 +15,11 @@ from app.api.dependencies import get_db
 from app.api.endpoints import auth, chat, conversations, documents, quiz
 from app.api.security.rate_limiter import limiter
 from app.config import settings
+from app.core import conversation_store
+from app.core import database as coredb
 from app.core.database import engine
 from app.core.llm_engine import llm_engine
+from app.core.request_limits import UploadSizeLimitMiddleware
 from app.core.schema import ensure_schema
 from app.core.security_check import enforce_jwt_secret
 from app.rag import vector_store as vs
@@ -27,12 +30,12 @@ _LOCAL_HOSTS = ("localhost", "127.0.0.1")
 
 
 def _expand_local_origins(origins: list[str]) -> list[str]:
-    """Với mỗi origin dev (localhost / 127.0.0.1), thêm origin "anh em" của nó.
+    """For each development origin (localhost / 127.0.0.1), add its counterpart origin.
 
-    Trình duyệt coi ``http://localhost:5173`` và ``http://127.0.0.1:5173`` là
-    HAI origin khác nhau. Nếu .env chỉ khai báo localhost mà bạn mở web bằng
-    127.0.0.1 thì mọi request bị CORS chặn và axios chỉ báo "Network Error".
-    Origin production (domain thật) không bị ảnh hưởng.
+    Browsers treat ``http://localhost:5173`` and ``http://127.0.0.1:5173`` as
+    TWO different origins. If .env lists only localhost but the site is opened
+    using 127.0.0.1, all requests are blocked by CORS and axios only reports "Network Error".
+    Production origins (real domains) are not affected.
     """
     expanded = list(origins)
     for origin in origins:
@@ -89,12 +92,12 @@ class UnhandledErrorMiddleware:
             await self.app(scope, receive, tracking_send)
         except Exception as exc:
             if response_started:
-                raise  # header đã gửi đi, không thể đổi thành 500 nữa
+                raise  # Headers have already been sent; the response can no longer be changed to 500.
             logger.exception(
                 "Unhandled error on %s %s", scope.get("method"), scope.get("path")
             )
-            # Nêu tên loại lỗi (không lộ nội dung/chi tiết) để chẩn đoán nhanh, ví dụ
-            # "(ProgrammingError)" gợi ý lệch schema DB; traceback đầy đủ nằm trong log backend.
+            # Include the error type (without exposing its content/details) for quick diagnosis; for example,
+            # "(ProgrammingError)" may indicate a database schema mismatch. The full traceback is in the backend log.
             response = JSONResponse(
                 {"detail": f"Internal server error ({type(exc).__name__}). Check the backend logs."},
                 status_code=500,
@@ -104,16 +107,27 @@ class UnhandledErrorMiddleware:
 
 @asynccontextmanager
 async def lifespan(_app):
-    # Fail-fast: JWT_SECRET mặc định/yếu => ai cũng giả được token. Phải chạy TRƯỚC mọi việc khác.
+    # Fail fast: with a default/weak JWT_SECRET, anyone can forge tokens. This must run BEFORE anything else.
     enforce_jwt_secret(settings.jwt_secret, settings.app_env)
 
-    # Database tạo từ trước có thể thiếu cột/bảng mà code hiện tại cần (init_db.sql chỉ chạy khi
-    # volume còn trống) -> mọi truy vấn users nổ UndefinedColumnError, đăng ký/đăng nhập trả 500.
+    # A pre-existing database may lack columns/tables required by the current code (init_db.sql only runs when
+    # the volume is empty) -> user queries raise UndefinedColumnError and registration/login return HTTP 500.
     if settings.auto_migrate_schema:
         try:
             await ensure_schema(engine)
         except Exception:
             logger.exception("Automatic schema upgrade failed; the API may return 500 errors")
+
+    # Clean up old empty conversations (created by opening "New chat" without sending a message).
+    # Cleanup must not prevent startup.
+    try:
+        async with coredb.async_session() as session:
+            removed = await conversation_store.purge_stale_empty(session, settings.empty_conversation_ttl_s)
+            await session.commit()
+        if removed:
+            logger.info("Removed %d stale empty conversation(s).", removed)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not purge stale empty conversations", exc_info=True)
 
     def _warm():
         try:
@@ -144,7 +158,7 @@ def _retry_after_seconds(exc: RateLimitExceeded) -> int | None:
     (code cũ dùng getattr nên header Retry-After không bao giờ được gửi)."""
     try:
         return int(exc.limit.limit.get_expiry())
-    except Exception:  # noqa: BLE001 - không để lỗi phụ làm hỏng response 429
+    except Exception:  # noqa: BLE001 - Do not let a secondary error break the 429 response.
         return None
 
 
@@ -158,8 +172,16 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
         headers=headers,
     )
 
-# Thứ tự quan trọng: add_middleware thêm lớp MỚI vào NGOÀI CÙNG, nên
-# UnhandledErrorMiddleware phải được thêm TRƯỚC CORS để nằm BÊN TRONG CORS.
+# Order matters: add_middleware places each new layer on the OUTSIDE, so
+# UnhandledErrorMiddleware must be added BEFORE CORS to remain INSIDE CORS.
+# Reject oversized upload bodies BEFORE Starlette writes them to disk. Add this BEFORE
+# UnhandledErrorMiddleware (so it stays INSIDE it) to avoid treating its internal exception as HTTP 500;
+# CORS remains outside, so the 413 response still includes CORS headers.
+app.add_middleware(
+    UploadSizeLimitMiddleware,
+    path="/api/documents/upload",
+    max_body_bytes=documents.MAX_UPLOAD_SIZE_BYTES + 1024 * 1024,  # +1 MB for multipart overhead.
+)
 app.add_middleware(UnhandledErrorMiddleware)
 
 # CORS — explicit allow-list instead of wildcard "*".

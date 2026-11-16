@@ -65,7 +65,7 @@ async def test_cancellation_closes_the_generator_even_mid_next():
             pass
 
     task = asyncio.ensure_future(consume())
-    await asyncio.sleep(0.5)  # đang chờ một next() chậm trong thread
+    await asyncio.sleep(0.5)  # Waiting for a slow next() call in the thread.
     task.cancel()
     try:
         await task

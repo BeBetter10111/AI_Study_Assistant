@@ -1,13 +1,13 @@
-# Triển khai thật: frontend là bản build tĩnh chạy bằng nginx không-root (thay cho Vite dev server).
+# Production deployment: the frontend is a static build served by non-root nginx (instead of the Vite dev server).
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
-# Hoặc đặt cố định trong .env:   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
-# (cần Docker Compose >= 2.24 cho các thẻ !reset / !override bên dưới)
+# Alternatively, set this in .env:   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+# (Docker Compose >= 2.24 is required for the !reset / !override tags below)
 #
-# Địa chỉ API được đóng vào bundle lúc build: đặt VITE_API_BASE_URL (biến môi trường hoặc .env) nếu
-# khác với frontend/.env.local, ví dụ  VITE_API_BASE_URL=https://api.example.com/api
-# Nhớ thêm origin của frontend vào ALLOWED_ORIGINS của backend.
+# The API URL is baked into the bundle at build time: set VITE_API_BASE_URL (environment variable or .env) if
+# it differs from frontend/.env.local, for example: VITE_API_BASE_URL=https://api.example.com/api
+# Remember to add the frontend origin to the backend's ALLOWED_ORIGINS.
 services:
   frontend:
     build:

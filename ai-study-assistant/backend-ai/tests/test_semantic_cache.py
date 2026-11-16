@@ -15,14 +15,14 @@ from app.rag.semantic_cache import SemanticCache  # noqa: E402
 
 REAL = os.environ.get("TEST_REDIS_URL")
 
-# Embedding giả có kiểm soát: cosine(q, q_paraphrase) ≈ 0.97, các câu khác trực giao.
+# Controlled mock embeddings: cosine(q, q_paraphrase) ≈ 0.97; all other sentences are orthogonal.
 VECTORS = {
     "stack la gi": [1.0, 0.0, 0.0, 0.0],
     "stack nghia la gi": [0.97, 0.243, 0.0, 0.0],      # cosine ≈ 0.970
-    "stack khac hoan toan": [0.8, 0.6, 0.0, 0.0],       # cosine = 0.80 (dưới ngưỡng)
+    "stack khac hoan toan": [0.8, 0.6, 0.0, 0.0],       # cosine = 0.80 (below the threshold)
     "queue la gi": [0.0, 0.0, 1.0, 0.0],
     "slide 3 noi gi": [0.0, 0.0, 0.0, 1.0],
-    "slide 4 noi gi": [0.0, 0.0, 0.0, 1.0],             # embedding GIỐNG HỆT, chỉ khác số
+    "slide 4 noi gi": [0.0, 0.0, 0.0, 1.0],             # IDENTICAL embedding; only the number differs
     "x1": [0.0, 0.0, 0.7, 0.7],
     "x2": [0.0, 0.7, 0.7, 0.0],
     "x3": [0.7, 0.0, 0.0, 0.7],
@@ -98,7 +98,7 @@ async def test_identical_question_hits(cache):
 async def test_below_threshold_and_unrelated_miss(cache):
     await _store(cache, "stack la gi")
     assert await _lookup(cache, "stack khac hoan toan") is None   # cosine 0.80 < 0.92
-    assert await _lookup(cache, "queue la gi") is None            # trực giao
+    assert await _lookup(cache, "queue la gi") is None            # Orthogonal
 
 
 async def test_threshold_is_configurable(cache, monkeypatch):
@@ -124,7 +124,7 @@ async def test_scope_document_intent_topk_must_match(cache):
     await _store(cache, "stack la gi", doc="doc-A", intent="qa", top_k=3)
     assert await _lookup(cache, "stack la gi", doc="doc-A", intent="qa", top_k=3) is not None
     assert await _lookup(cache, "stack la gi", doc="doc-B") is None
-    assert await _lookup(cache, "stack la gi", doc=None) is None           # "tất cả tài liệu" là phạm vi khác
+    assert await _lookup(cache, "stack la gi", doc=None) is None           # "All documents" is a different scope.
     assert await _lookup(cache, "stack la gi", doc="doc-A", intent="summarization") is None
     assert await _lookup(cache, "stack la gi", doc="doc-A", top_k=5) is None
 
@@ -141,16 +141,16 @@ async def test_invalidate_owner_drops_old_answers_only_for_that_owner(cache):
     await cache.invalidate_owner("alice")
     assert await _lookup(cache, "stack la gi", owner="alice") is None
     assert await _lookup(cache, "stack la gi", owner="bob") is not None
-    # câu trả lời mới sau khi vô hiệu hóa lại dùng được
+    # A new answer is usable after invalidation.
     await _store(cache, "stack la gi", owner="alice", answer="mới")
     assert (await _lookup(cache, "stack la gi", owner="alice")).payload["answer"] == "mới"
 
 
 async def test_generation_captured_at_open_so_stale_answers_stay_stale(cache):
-    session = await cache.open("alice", None, "qa", 3, "stack la gi")   # trước khi tài liệu mới xong
-    await cache.invalidate_owner("alice")                                # tài liệu mới được nhúng xong
+    session = await cache.open("alice", None, "qa", 3, "stack la gi")   # Before the new document is ready
+    await cache.invalidate_owner("alice")                                # The new document has been embedded
     await session.store({"answer": "cũ", "citations": [], "standalone_query": "stack la gi"})
-    assert await _lookup(cache, "stack la gi", owner="alice") is None    # câu trả lời cũ không sống lại
+    assert await _lookup(cache, "stack la gi", owner="alice") is None    # The old answer must not reappear.
 
 
 async def test_ttl_is_set_on_entry_and_index(cache, server):
@@ -168,8 +168,8 @@ async def test_size_cap_evicts_oldest(cache, monkeypatch):
     session = await cache.open("u1", None, "qa", 3, "x1")
     r = cache._redis()
     assert await r.zcard(session.index_key) == 3
-    assert len([k async for k in r.scan_iter(f"{sc.PREFIX}:e:*")]) == 3   # mục bị loại cũng bị xóa
-    assert await _lookup(cache, "x1") is None                              # cũ nhất đã bị loại
+    assert len([k async for k in r.scan_iter(f"{sc.PREFIX}:e:*")]) == 3   # Evicted entries are deleted too.
+    assert await _lookup(cache, "x1") is None                              # The oldest entry was evicted.
     assert await _lookup(cache, "x5") is not None
 
 
@@ -177,7 +177,7 @@ async def test_expired_entries_are_skipped_and_cleaned_from_index(cache):
     session = await _store(cache, "stack la gi")
     r = cache._redis()
     for key in [k async for k in r.scan_iter(f"{sc.PREFIX}:e:*")]:
-        await r.delete(key)                                                # mô phỏng hết TTL
+        await r.delete(key)                                                # Simulate TTL expiration.
     assert await _lookup(cache, "stack la gi") is None
     assert await r.zcard(session.index_key) == 0
 
@@ -205,9 +205,9 @@ async def test_redis_failure_is_fail_open_and_trips_breaker():
             raise ConnectionError("redis is down")
 
     cache = SemanticCache(embed_fn=_embed, fingerprint_fn=lambda: "fp", client_factory=Broken)
-    assert await cache.open("u1", None, "qa", 3, "stack la gi") is None   # không ném lỗi
+    assert await cache.open("u1", None, "qa", 3, "stack la gi") is None   # Does not raise.
     assert calls["n"] == 1
-    assert await cache.open("u1", None, "qa", 3, "stack la gi") is None   # breaker: không gọi Redis nữa
+    assert await cache.open("u1", None, "qa", 3, "stack la gi") is None   # Circuit breaker: do not call Redis again.
     assert calls["n"] == 1
 
 
@@ -238,7 +238,7 @@ async def test_invalidate_owner_sync_bumps_the_same_generation_key(server, monke
     sc.invalidate_owner_sync("alice")
     check = fakeredis.FakeAsyncRedis(server=server)
     assert int(await check.get(sc.generation_key("alice"))) == 2
-    sc.invalidate_owner_sync("")            # owner rỗng: không làm gì, không lỗi
+    sc.invalidate_owner_sync("")            # Empty owner: no action and no error.
 
 
 async def test_invalidate_owner_does_nothing_when_disabled_or_redis_is_down(cache, monkeypatch):
@@ -251,13 +251,13 @@ async def test_invalidate_owner_does_nothing_when_disabled_or_redis_is_down(cach
     cache._client, cache._client_loop = Spy(), __import__("asyncio").get_running_loop()
     monkeypatch.setattr(settings, "semantic_cache_enabled", False)
     await cache.invalidate_owner("alice")
-    assert calls["n"] == 0                                   # tắt cache => không đụng Redis
+    assert calls["n"] == 0                                   # Cache disabled => do not touch Redis.
 
     monkeypatch.setattr(settings, "semantic_cache_enabled", True)
-    cache._down_until = __import__("time").monotonic() + 60   # breaker đang mở
+    cache._down_until = __import__("time").monotonic() + 60   # Circuit breaker is open.
     await cache.invalidate_owner("alice")
     assert calls["n"] == 0
 
     cache._down_until = 0.0
     await cache.invalidate_owner("alice")
-    assert calls["n"] == 1                                   # bình thường thì có gọi
+    assert calls["n"] == 1                                   # Normally, Redis is called.

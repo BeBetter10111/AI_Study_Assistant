@@ -30,14 +30,14 @@ const UPLOAD_CONCURRENCY = 3;
 const ALLOWED_EXT = /\.(pdf|docx|pptx|md)$/i;
 const DONE_STATUSES = ["embedded", "failed"];
 
-// Các màn hình sau đăng nhập. Lưu trong URL hash (#/profile) để tải lại trang vẫn ở đúng chỗ.
+// Screens available after login. Store the route in the URL hash (#/profile) so reloads stay on the same screen.
 const VIEWS = ["chat", "quiz", "flashcard", "profile", "settings"];
 const readView = () => {
   const name = window.location.hash.replace(/^#\/?/, "");
   return VIEWS.includes(name) ? name : "chat";
 };
 
-// Danh sách từ server là nguồn chính; giữ lại các mục chỉ có ở máy (đang tải lên / lỗi tải lên).
+// The server list is the source of truth; retain local-only items (uploading / failed uploads).
 const mergeServerDocs = (prev, docs) => {
   const known = new Set(docs.map((d) => d.id));
   const local = prev.filter((u) => !u.id || !known.has(u.id));
@@ -45,7 +45,7 @@ const mergeServerDocs = (prev, docs) => {
   return [...local, ...server];
 };
 
-// Tin nhắn lưu ở server -> dạng ChatWindow đang dùng.
+// Convert server-stored messages to the format used by ChatWindow.
 const toUiMessage = (m) =>
   m.role === "assistant"
     ? { role: "assistant", content: m.content, citations: m.citations || [], intent: m.intent, cached: m.cached }
@@ -86,9 +86,9 @@ export default function App() {
   const [pendingDelete, setPendingDelete] = useState(null); // {type: "document" | "conversation", id, name}
   const [notice, setNotice] = useState(null);
   const [conversations, setConversations] = useState([]);
-  const [conversationId, setConversationId] = useState(null); // null = cuộc trò chuyện mới
+  const [conversationId, setConversationId] = useState(null); // null = new conversation
   const [initialMessages, setInitialMessages] = useState([]);
-  const [chatKey, setChatKey] = useState(0); // đổi => ChatWindow khởi tạo lại với hội thoại khác
+  const [chatKey, setChatKey] = useState(0); // Changing this remounts ChatWindow with a different conversation.
   const [profile, setProfile] = useState(null);
   const [documentId, setDocumentId] = useState(null);
   const [uploads, setUploads] = useState([]); 
@@ -104,7 +104,7 @@ export default function App() {
     window.location.hash = `/${next}`;
   };
 
-  // Token hết hạn / bị vô hiệu hoá (ví dụ đã đổi mật khẩu ở nơi khác): quay về màn hình đăng nhập.
+  // Expired / revoked token (e.g. after changing the password elsewhere): return to the login screen.
   const expireSession = useCallback(() => {
     setAuthToken(null);
     localStorage.removeItem("auth_token");
@@ -127,8 +127,8 @@ export default function App() {
     return () => setUnauthorizedHandler(null);
   }, [expireSession]);
 
-  // Lấy hồ sơ thật (họ tên, email...) sau khi đăng nhập. Endpoint /auth/* nằm ngoài interceptor 401
-  // chung, nên 401 ở đây được xử lý riêng: token không còn hợp lệ -> về màn hình đăng nhập.
+  // Fetch the real profile (name, email, etc.) after login. The /auth/* endpoint is outside the shared 401 interceptor,
+  // so handle a 401 here separately: the token is no longer valid -> return to the login screen.
   useEffect(() => {
     if (!userEmail) return undefined;
     let cancelled = false;
@@ -144,7 +144,7 @@ export default function App() {
     };
   }, [userEmail, expireSession]);
 
-  // Đổi mật khẩu thu hồi token cũ: nhận token mới và giữ nguyên chế độ "Remember me" nếu đang bật.
+  // A password change revokes the old token: accept the new token and preserve "Remember me" if enabled.
   const handlePasswordChanged = (token) => {
     setAuthToken(token);
     if (localStorage.getItem("auth_token")) localStorage.setItem("auth_token", token);
@@ -237,11 +237,11 @@ export default function App() {
       const res = await listConversations();
       setConversations(res.data);
     } catch {
-      /* danh sách chỉ là tiện ích; lần thao tác sau sẽ thử lại */
+      /* The list is only a convenience; the next action will retry. */
     }
   }, []);
 
-  // Sau khi đăng nhập (hoặc tải lại trang): khôi phục tài liệu và hội thoại đã lưu ở server.
+  // After login (or a page reload), restore documents and conversations saved on the server.
   useEffect(() => {
     if (!userEmail) return undefined;
     let cancelled = false;
@@ -250,7 +250,7 @@ export default function App() {
         if (!cancelled) setUploads((prev) => mergeServerDocs(prev, res.data));
       })
       .catch(() => {
-        /* giữ nguyên danh sách hiện có */
+        /* Keep the current list unchanged. */
       });
     refreshConversations();
     return () => {
@@ -288,7 +288,7 @@ export default function App() {
 
   const requestDeleteDocument = (u) => {
     if (!u.id) {
-      // Mục chưa lên server (tải lên lỗi): chỉ cần gỡ khỏi danh sách.
+      // Item not yet on the server (upload failed): just remove it from the list.
       setUploads((prev) => prev.filter((x) => x.key !== u.key));
       return;
     }
@@ -453,7 +453,7 @@ export default function App() {
           <span className="brand">AI Study Assistant</span>
         </div>
 
-        {/* Hỏi đáp / Quiz / Thẻ ghi nhớ luôn được giữ trong bộ nhớ để chuyển trang không mất nội dung. */}
+        {/* Keep Q&A / Quiz / Flashcards in memory so their content is preserved when navigating between pages. */}
         <main className="view view--chat" hidden={view !== "chat"}>
           <ChatWindow
             key={chatKey}
