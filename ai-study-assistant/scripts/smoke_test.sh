@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Smoke test tối thiểu sau khi deploy — "hít khói xem có cháy không" trước
-# khi tin bản mới. Dùng cả trong CD pipeline (deploy-staging/production) lẫn
-# chạy tay sau khi `docker compose up -d` ở local.
+# Minimal post-deployment smoke test — check for obvious failures before
+# trusting a new release. Used in the CD pipeline (deploy-staging/production) and
+# when run manually after `docker compose up -d` locally.
 #
-# Cách dùng: BASE_URL=http://localhost:8000 ./scripts/smoke_test.sh
+# Usage: BASE_URL=http://localhost:8000 ./scripts/smoke_test.sh
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
@@ -12,8 +12,8 @@ RETRY_DELAY_S="${RETRY_DELAY_S:-3}"
 
 log() { echo "[smoke_test] $*"; }
 
-# 1) Chờ /health trả 200 — có retry vì container vừa "up" có thể cần vài giây
-#    để backend kết nối xong Postgres/Qdrant/MinIO (xem app/main.py).
+# 1) Wait for /health to return 200 — retry because a newly started container may need a few seconds
+#    for the backend to connect to Postgres/Qdrant/MinIO (see app/main.py).
 log "Chờ $BASE_URL/health sẵn sàng..."
 attempt=1
 until curl --silent --fail --max-time 5 "$BASE_URL/health" > /tmp/health_response.json; do
@@ -27,8 +27,8 @@ until curl --silent --fail --max-time 5 "$BASE_URL/health" > /tmp/health_respons
 done
 log "OK: /health = $(cat /tmp/health_response.json)"
 
-# 2) Gọi 1-2 API quan trọng — không cần thành công theo nghĩa "trả dữ liệu
-#    đúng", chỉ cần server không sập/504/502 với payload hợp lệ tối thiểu.
+# 2) Call one or two important APIs — they do not need to return "correct" data;
+#    the goal is only to verify that the server does not crash or return 504/502 for a minimally valid payload.
 log "Kiểm tra /api/chat/query phản hồi (không cần có ngữ cảnh)..."
 chat_status=$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 10 \
   -X POST "$BASE_URL/api/chat/query" \

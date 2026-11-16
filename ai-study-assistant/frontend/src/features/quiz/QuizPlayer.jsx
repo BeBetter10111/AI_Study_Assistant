@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { generateQuiz, submitQuizResult } from "../../services/api";
+import { generateQuiz, getErrorMessage, submitQuizResult } from "../../services/api";
 
 const STATUS = {
   IDLE: "idle",
@@ -9,7 +9,13 @@ const STATUS = {
   ERROR: "error",
 };
 
-export default function QuizPlayer({ documentId = null }) {
+const DIFFICULTY_LABEL = {
+  easy: { text: "Dễ", tone: "ok" },
+  medium: { text: "Trung bình", tone: "warn" },
+  hard: { text: "Khó", tone: "err" },
+};
+
+export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả tài liệu" }) {
   const [topic, setTopic] = useState("");
   const [numQuestions, setNumQuestions] = useState(5);
   const [status, setStatus] = useState(STATUS.IDLE);
@@ -24,21 +30,30 @@ export default function QuizPlayer({ documentId = null }) {
   const [questionStartedAt, setQuestionStartedAt] = useState(null);
   const [score, setScore] = useState(0);
 
+  
+  // Current difficulty (determined by the backend from the user's RL state)
+  const [currentDifficulty, setCurrentDifficulty] = useState(null);
+  // Next difficulty (returned after each submission and used to display a notification)
+  const [nextDifficulty, setNextDifficulty] = useState(null);
+
   const handleGenerate = async () => {
     if (!topic.trim()) return;
 
     setStatus(STATUS.LOADING);
     setErrorMessage(null);
+    setNextDifficulty(null);
     try {
+      // The backend determines difficulty from the RL state — the client does not need to send it.
       const response = await generateQuiz(topic.trim(), numQuestions, documentId);
-      const { quiz_id, questions: generatedQuestions } = response.data;
+      const { quiz_id, questions: generatedQuestions, difficulty } = response.data;
 
       if (!generatedQuestions || generatedQuestions.length === 0) {
-        throw new Error("No questions generated for this topic.");
+        throw new Error("Không có câu hỏi nào được tạo ra cho chủ đề này.");
       }
 
       setQuizId(quiz_id);
       setQuestions(generatedQuestions);
+      setCurrentDifficulty(difficulty);   // ← Save the difficulty selected by the backend.
       setCurrentIndex(0);
       setScore(0);
       setSelectedOption(null);
@@ -48,7 +63,7 @@ export default function QuizPlayer({ documentId = null }) {
       setStatus(STATUS.PLAYING);
     } catch (err) {
       const detail =
-        err.response?.data?.detail || err.message || "Unable to generate quiz.";
+        getErrorMessage(err, err.message || "Không thể tạo quiz.");
       setErrorMessage(detail);
       setStatus(STATUS.ERROR);
     }
@@ -78,14 +93,18 @@ export default function QuizPlayer({ documentId = null }) {
     if (isCorrect) setScore((prev) => prev + 1);
 
     try {
-      await submitQuizResult(quizId, {
+      const res = await submitQuizResult(quizId, {
         document_id: documentId,
         is_correct: isCorrect,
         response_time_s: responseTimeS,
         hints_used: hintsUsedThisQuestion,
       });
+      // ← Save next_difficulty to display feedback to the user.
+      if (res.data?.next_difficulty) {
+        setNextDifficulty(res.data.next_difficulty);
+      }
     } catch {
-      console.warn("Unable to submit quiz result to the server.");
+      console.warn("Không thể gửi kết quả quiz lên server.");
     }
   };
 
@@ -98,6 +117,7 @@ export default function QuizPlayer({ documentId = null }) {
     setSelectedOption(null);
     setIsAnswerRevealed(false);
     setHintsUsedThisQuestion(0);
+    setNextDifficulty(null);
     setQuestionStartedAt(Date.now());
   };
 
@@ -105,107 +125,198 @@ export default function QuizPlayer({ documentId = null }) {
     setStatus(STATUS.IDLE);
     setQuestions([]);
     setQuizId(null);
+    setCurrentDifficulty(null);
+    setNextDifficulty(null);
   };
 
+  // -------------------------------------------------------------------------
+  // Render: IDLE / LOADING / ERROR
+  // -------------------------------------------------------------------------
   if (status === STATUS.IDLE || status === STATUS.LOADING || status === STATUS.ERROR) {
+    const isLoading = status === STATUS.LOADING;
     return (
-      <div style={styles.container}>
-        <h3 style={styles.heading}>Tạo bộ câu hỏi trắc nghiệm</h3>
-        <input
-          style={styles.input}
-          placeholder="Topic (e.g., Stack Data Structure)"
-          value={topic}
-          onChange={(event) => setTopic(event.target.value)}
-          disabled={status === STATUS.LOADING}
-        />
-        <label style={styles.label}>
-          Số câu hỏi:
-          <input
-            style={styles.numberInput}
-            type="number"
-            min={1}
-            max={50}
-            value={numQuestions}
-            onChange={(event) => setNumQuestions(Number(event.target.value))}
-            disabled={status === STATUS.LOADING}
-          />
-        </label>
-        <button
-          style={styles.primaryButton}
-          onClick={handleGenerate}
-          disabled={status === STATUS.LOADING || !topic.trim()}
+      <div className="page">
+        <header className="page-head">
+          <h1 className="page-title">Tạo bộ câu hỏi trắc nghiệm</h1>
+          <p className="page-sub">Nhập chủ đề, câu hỏi sẽ được tạo từ nội dung tài liệu của bạn.</p>
+        </header>
+
+        <form
+          className="card card-pad"
+          style={{ display: "grid", gap: 18 }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!isLoading) handleGenerate();
+          }}
         >
-          {status === STATUS.LOADING ? "Generating…" : "Generate Quiz"}
-        </button>
-        {errorMessage && <p style={styles.error}>{errorMessage}</p>}
+          <div className="field">
+            <label className="label" htmlFor="quiz-topic">
+              Chủ đề
+            </label>
+            <input
+              id="quiz-topic"
+              className="input"
+              placeholder="Ví dụ: Cấu trúc dữ liệu Stack"
+              value={topic}
+              onChange={(event) => setTopic(event.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+          <div className="field">
+            <label className="label" htmlFor="quiz-count">
+              Số câu hỏi
+            </label>
+            <input
+              id="quiz-count"
+              className="input input--num"
+              type="number"
+              min={1}
+              max={50}
+              value={numQuestions}
+              onChange={(event) => setNumQuestions(Number(event.target.value))}
+              disabled={isLoading}
+            />
+          </div>
+          <p className="field-hint">
+            Phạm vi: {scopeLabel}. Độ khó tự điều chỉnh theo kết quả làm bài của bạn.
+          </p>
+          {errorMessage && (
+            <p className="note note--err" role="alert">
+              {errorMessage}
+            </p>
+          )}
+          <div className="actions">
+            <button type="submit" className="btn btn--primary btn--lg" disabled={isLoading || !topic.trim()}>
+              {isLoading ? "Đang tạo…" : "Tạo quiz"}
+            </button>
+          </div>
+        </form>
       </div>
     );
   }
 
+  // -------------------------------------------------------------------------
+  // Render: FINISHED
+  // -------------------------------------------------------------------------
   if (status === STATUS.FINISHED) {
+    const pct = Math.round((score / questions.length) * 100);
+    const next = nextDifficulty ? DIFFICULTY_LABEL[nextDifficulty] : null;
     return (
-      <div style={styles.container}>
-        <h3 style={styles.heading}>Results</h3>
-        <p>
-          Bạn trả lời đúng {score}/{questions.length} câu.
-        </p>
-        <button style={styles.primaryButton} onClick={handleRestart}>
-          Làm bộ câu hỏi khác
-        </button>
+      <div className="page">
+        <header className="page-head">
+          <h1 className="page-title">Kết quả</h1>
+          <p className="page-sub">Bạn đã hoàn thành bộ câu hỏi.</p>
+        </header>
+        <section className="card card-pad" style={{ display: "grid", gap: 16 }}>
+          <div>
+            <div className="result-score">
+              {score}/{questions.length}
+            </div>
+            <p className="page-sub">Trả lời đúng {pct}% số câu.</p>
+          </div>
+          {next && (
+            <p>
+              Độ khó tiếp theo: <span className={`badge badge--${next.tone}`}>{next.text}</span>
+            </p>
+          )}
+          <div className="actions">
+            <button type="button" className="btn btn--primary btn--lg" onClick={handleRestart}>
+              Làm bộ câu hỏi khác
+            </button>
+          </div>
+        </section>
       </div>
     );
   }
+
+  // -------------------------------------------------------------------------
+  // Render: PLAYING
+  // -------------------------------------------------------------------------
+  const diffLabel = currentDifficulty ? DIFFICULTY_LABEL[currentDifficulty] : null;
+  const answered = currentIndex + (isAnswerRevealed ? 1 : 0);
 
   return (
-    <div style={styles.container}>
-      <p style={styles.progress}>
-        Câu {currentIndex + 1}/{questions.length} — Điểm: {score}
-      </p>
-      <h3 style={styles.question}>{currentQuestion.question}</h3>
+    <div className="page">
+      <div className="quiz-meta">
+        <span>
+          Câu {currentIndex + 1}/{questions.length}
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+          {diffLabel && <span className={`badge badge--${diffLabel.tone}`}>{diffLabel.text}</span>}
+          Điểm: {score}
+        </span>
+      </div>
+      <div
+        className="progress"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={questions.length}
+        aria-valuenow={answered}
+      >
+        <div style={{ width: `${(answered / questions.length) * 100}%` }} />
+      </div>
 
-      <div style={styles.optionList}>
+      <h2 className="question">{currentQuestion.question}</h2>
+
+      <div className="options">
         {currentQuestion.options.map((option, index) => {
           const isSelected = selectedOption === index;
           const isCorrectOption = index === currentQuestion.correct_index;
-          let background = "#fff";
-          if (isAnswerRevealed && isCorrectOption) background = "#dcfce7";
-          else if (isAnswerRevealed && isSelected && !isCorrectOption) background = "#fee2e2";
-          else if (isSelected) background = "#e0e7ff";
+          let tone = "";
+          if (isAnswerRevealed && isCorrectOption) tone = " option--correct";
+          else if (isAnswerRevealed && isSelected && !isCorrectOption) tone = " option--wrong";
+          else if (isSelected) tone = " option--selected";
 
           return (
             <button
               key={index}
-              style={{ ...styles.optionButton, backgroundColor: background }}
+              type="button"
+              className={`option${tone}`}
+              aria-pressed={isSelected}
               onClick={() => handleSelectOption(index)}
               disabled={isAnswerRevealed}
             >
-              {option}
+              <span className="option-key">{String.fromCharCode(65 + index)}</span>
+              <span>{option}</span>
             </button>
           );
         })}
       </div>
 
       {isAnswerRevealed && (
-        <p style={styles.explanation}>{currentQuestion.explanation}</p>
+        <>
+          <p className="explain">{currentQuestion.explanation}</p>
+          {/* Show RL feedback immediately after submitting an answer. */}
+          {nextDifficulty && (
+            <p className="field-hint" style={{ marginTop: 10 }}>
+              {nextDifficulty === currentDifficulty
+                ? `Giữ nguyên độ khó: ${DIFFICULTY_LABEL[nextDifficulty]?.text}`
+                : nextDifficulty === "hard" || DIFFICULTY_LEVELS.indexOf(nextDifficulty) > DIFFICULTY_LEVELS.indexOf(currentDifficulty)
+                  ? `Tăng lên: ${DIFFICULTY_LABEL[nextDifficulty]?.text}`
+                  : `Giảm xuống: ${DIFFICULTY_LABEL[nextDifficulty]?.text}`}
+            </p>
+          )}
+        </>
       )}
 
-      <div style={styles.actionsRow}>
+      <div className="quiz-actions">
         {!isAnswerRevealed && (
-          <button style={styles.secondaryButton} onClick={handleUseHint}>
+          <button type="button" className="btn btn--lg" onClick={handleUseHint}>
             Dùng gợi ý ({hintsUsedThisQuestion})
           </button>
         )}
         {!isAnswerRevealed ? (
           <button
-            style={styles.primaryButton}
+            type="button"
+            className="btn btn--primary btn--lg"
             onClick={handleSubmitAnswer}
             disabled={selectedOption === null}
           >
             Trả lời
           </button>
         ) : (
-          <button style={styles.primaryButton} onClick={handleNext}>
-            {currentIndex + 1 >= questions.length ? "View Results" : "Next Question"}
+          <button type="button" className="btn btn--primary btn--lg" onClick={handleNext}>
+            {currentIndex + 1 >= questions.length ? "Xem kết quả" : "Câu tiếp theo"}
           </button>
         )}
       </div>
@@ -213,60 +324,5 @@ export default function QuizPlayer({ documentId = null }) {
   );
 }
 
-const styles = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "12px",
-    padding: "16px",
-    border: "1px solid #e2e8f0",
-    borderRadius: "8px",
-  },
-  heading: { margin: 0 },
-  label: { display: "flex", alignItems: "center", gap: "8px" },
-  input: {
-    padding: "8px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-  },
-  numberInput: {
-    width: "64px",
-    padding: "4px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-  },
-  primaryButton: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "none",
-    backgroundColor: "#2563eb",
-    color: "#fff",
-    cursor: "pointer",
-    alignSelf: "flex-start",
-  },
-  secondaryButton: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#fff",
-    cursor: "pointer",
-  },
-  error: { color: "#dc2626" },
-  progress: { color: "#64748b", margin: 0 },
-  question: { margin: 0 },
-  optionList: { display: "flex", flexDirection: "column", gap: "8px" },
-  optionButton: {
-    textAlign: "left",
-    padding: "10px 12px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    cursor: "pointer",
-  },
-  explanation: {
-    backgroundColor: "#f8fafc",
-    padding: "10px",
-    borderRadius: "6px",
-    fontSize: "14px",
-  },
-  actionsRow: { display: "flex", gap: "8px" },
-};
+// Internal reference for calculating the difficulty direction (avoids a circular import).
+const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];

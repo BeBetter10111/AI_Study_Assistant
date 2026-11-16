@@ -83,7 +83,6 @@ def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
         })
     return items
 
-
 def select_metric_names(requested: Optional[Sequence[str]], has_reference: bool) -> List[str]:
     """Validate requested metrics; default set depends on whether references exist."""
     if not requested:
@@ -98,10 +97,8 @@ def select_metric_names(requested: Optional[Sequence[str]], has_reference: bool)
         )
     return list(dict.fromkeys(requested))
 
-
 def _is_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and not math.isnan(v)
-
 
 def summarize(rows: Sequence[Dict[str, Any]], metric_cols: Sequence[str]) -> Dict[str, Any]:
     """Mean per metric over rows with a valid score; also count failed judge calls."""

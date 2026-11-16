@@ -12,11 +12,89 @@ export const setAuthToken = (token) => {
   }
 };
 
-export const registerUser = (email, password) =>
-  api.post("/auth/register", { email, password });
+let unauthorizedHandler = null;
+export const setUnauthorizedHandler = (handler) => {
+  unauthorizedHandler = handler;
+};
 
-export const loginUser = (email, password) =>
-  api.post("/auth/login", { email, password });
+const notifyUnauthorized = () => {
+  if (api.defaults.headers.common.Authorization && unauthorizedHandler) unauthorizedHandler();
+};
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const url = error?.config?.url || "";
+    if (error?.response?.status === 401 && !url.startsWith("/auth/")) notifyUnauthorized();
+    return Promise.reject(error);
+  }
+);
+
+// FastAPI returns `detail` as a string (HTTPException) or an ARRAY (422 validation error). Rendering an array
+// of objects directly in JSX crashes React -> blank page, so always convert it to a string.
+const formatDetail = (detail) => {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((d) => d?.msg || JSON.stringify(d)).join("; ");
+  }
+  return null;
+};
+
+export const getErrorMessage = (err, fallback) => {
+  if (err && !err.response && err.request) {
+    return (
+      `Cannot reach the server at ${api.defaults.baseURL || "(VITE_API_BASE_URL is not set)"}. ` +
+      "Please check that the backend is running."
+    );
+  }
+  return formatDetail(err?.response?.data?.detail) || fallback;
+};
+
+export const registerUser = (data) =>
+  api.post("/auth/register", data);
+
+export const loginUser = (identifier, password) =>
+  api.post("/auth/login", { identifier, password });
+
+export const forgotPassword = (email) =>
+  api.post("/auth/forgot-password", { email });
+
+export const verifyResetCode = (email, code) =>
+  api.post("/auth/verify-reset-code", { email, code });
+
+export const resetPassword = (resetToken, newPassword, confirmPassword) =>
+  api.post("/auth/reset-password", {
+    reset_token: resetToken,
+    new_password: newPassword,
+    confirm_password: confirmPassword,
+  });
+
+export const getMe = () => api.get("/auth/me");
+
+export const updateProfile = (data) => api.patch("/auth/me", data);
+
+export const changePassword = (currentPassword, newPassword, confirmPassword) =>
+  api.post("/auth/change-password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+    confirm_password: confirmPassword,
+  });
+
+// Documents and conversation history are stored on the server, so lists can be restored after a page reload.
+export const listDocuments = () => api.get("/documents");
+
+export const deleteDocument = (id) => api.delete(`/documents/${id}`);
+
+export const listConversations = () => api.get("/conversations");
+
+export const createConversation = (documentId = null) =>
+  api.post("/conversations", { document_id: documentId });
+
+export const getConversation = (id) => api.get(`/conversations/${id}`);
+
+export const renameConversation = (id, title) => api.patch(`/conversations/${id}`, { title });
+
+export const deleteConversation = (id) => api.delete(`/conversations/${id}`);
 
 export const uploadDocument = (file) => {
   const form = new FormData();
@@ -47,22 +125,53 @@ export const submitQuizResult = (quizId, result) =>
 // Streams the RAG pipeline as Server-Sent Events so the UI can show each real
 // step ("Searching your document", ...). axios cannot stream in the browser,
 // so this uses fetch. Calls onEvent({type: "step"|"result"|"error", ...}).
-export const askQuestionStream = async (question, documentId, onEvent, topK = 4) => {
+const parseSseFrame = (frame) => {
+  const data = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+    .join("\n");
+  if (!data) return null;
+  try {
+    return JSON.parse(data);
+  } catch {
+    console.warn("Ignoring malformed SSE frame:", data.slice(0, 120));
+    return null;
+  }
+};
+
+// options: { topK, history: [{role, content}], signal: AbortSignal }
+// Pass `signal` to cancel mid-request ("Stop" button): the server detects the closed connection and stops generating the answer.
+export const askQuestionStream = async (
+  question,
+  documentId,
+  onEvent,
+  { topK = 4, history = [], signal, conversationId = null } = {}
+) => {
   const response = await fetch(`${api.defaults.baseURL || ""}/chat/query/stream`, {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
       ...(api.defaults.headers.common.Authorization
         ? { Authorization: api.defaults.headers.common.Authorization }
         : {}),
     },
-    body: JSON.stringify({ question, document_id: documentId, top_k: topK }),
+    body: JSON.stringify({
+      question,
+      document_id: documentId,
+      top_k: topK,
+      history,
+      // When conversation_id is present, the server saves the message and loads history from the DB (ignoring `history` above).
+      ...(conversationId ? { conversation_id: conversationId } : {}),
+    }),
   });
 
+  if (response.status === 401) notifyUnauthorized();
   if (!response.ok || !response.body) {
     let detail = "An error occurred while connecting to the AI assistant.";
     try {
-      detail = (await response.json()).detail || detail;
+      detail = formatDetail((await response.json()).detail) || detail;
     } catch {
       /* non-JSON error body */
     }
@@ -72,15 +181,20 @@ export const askQuestionStream = async (question, documentId, onEvent, topK = 4)
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const flush = (frames) => {
+    for (const frame of frames) {
+      const event = parseSseFrame(frame);
+      if (event) onEvent(event);
+    }
+  };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
     const frames = buffer.split("\n\n");
     buffer = frames.pop();
-    for (const frame of frames) {
-      const line = frame.split("\n").find((l) => l.startsWith("data:"));
-      if (line) onEvent(JSON.parse(line.slice(5).trim()));
-    }
+    flush(frames);
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) flush([buffer]); // The final frame has no trailing blank line.
 };

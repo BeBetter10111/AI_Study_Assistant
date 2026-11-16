@@ -1,15 +1,3 @@
-"""Document ingestion — text extraction + structured chunking.
-
-Returns typed ``ChunkData`` objects (from chunking.py) that carry source
-metadata (page number, slide number/title, section heading) so the vector
-store can persist them and the chat endpoint can render precise citations.
-
-Also supports a *summarization phase*: after extracting all chunks for a
-document, a short extractive summary is generated per group of segments
-(PDF page or PPTX slide) and stored as an extra ``ChunkData`` with
-``extra["is_summary"] = True``.  This summary chunk lets the retriever find
-high-level answers without pulling in many noisy detail chunks.
-"""
 from __future__ import annotations
 
 import io
@@ -29,20 +17,16 @@ from app.rag.chunking import (
     chunk_docx_sections,
     chunk_pdf_pages,
     chunk_pptx_slides,
-    chunk_text,
 )
 
 logger = logging.getLogger(__name__)
 
-# If text extracted from a page/block is shorter than this, try OCR instead.
 OCR_FALLBACK_THRESHOLD_CHARS = 20
 OCR_LANGUAGES = "vie+eng"
 
-# Minimum character count for a summary segment to be worth generating.
 _SUMMARY_MIN_CHARS = 200
 
 
-# OCR helper
 def _ocr_image_bytes(image_bytes: bytes) -> str:
     """Run basic OCR on raw image bytes; return '' on any failure."""
     try:
@@ -125,7 +109,6 @@ def _is_markdown(file_path: str, mime_type: str) -> bool:
 
 def _extract_md_sections(file_path: str) -> List[Dict[str, Any]]:
     """Return section dicts (same shape as DOCX), split on ``#`` headings.
-
     Lines inside fenced code blocks are never treated as headings.
     """
     with open(file_path, "r", encoding="utf-8-sig", errors="replace") as fh:
@@ -159,7 +142,6 @@ def _extract_md_sections(file_path: str) -> List[Dict[str, Any]]:
 
 
 def _extract_pptx_slides(file_path: str) -> List[Dict[str, Any]]:
-    """Return a list of slide dicts with slide_number, title, text."""
     prs = Presentation(file_path)
     slides: List[Dict[str, Any]] = []
 
@@ -195,7 +177,6 @@ def _extract_pptx_slides(file_path: str) -> List[Dict[str, Any]]:
     return slides
 
 
-# Summarization helper (extractive, runs at ingestion time)
 def _make_summary_chunk(
     text: str,
     chunk_index: int,
@@ -235,7 +216,6 @@ def _make_summary_chunk(
 # Public API
 def extract_and_chunk(file_path: str, mime_type: str) -> List[ChunkData]:
     """Extract text from a document and return structured ChunkData objects.
-
     This is the preferred entry point for the ingestion worker.  It returns
     metadata-rich chunks AND optional per-segment summary chunks appended at
     the end.

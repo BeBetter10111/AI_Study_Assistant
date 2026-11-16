@@ -1,10 +1,3 @@
-"""Structured chunking with rich metadata (page number, slide title, section).
-
-Each chunk is a dict rather than a bare string so that downstream components
-(vector_store, chat endpoint) can surface precise citations like "Slide 12" or
-"Page 3".  The plain-text fallback still returns ChunkData objects so the rest
-of the pipeline never has to branch on type.
-"""
 from __future__ import annotations
 
 import logging
@@ -18,21 +11,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ChunkData:
-    """A single text chunk together with all the metadata needed for citations."""
-
     content: str
-    # structural metadata -—- all optional so plain-text path still works
-    page_number: Optional[int] = None      # PDF page (1-indexed)
+    page_number: Optional[int] = None      
     slide_number: Optional[int] = None     # PPTX slide (1-indexed)
     slide_title: Optional[str] = None      # PPTX slide title text
     section_title: Optional[str] = None    # DOCX heading / section label
     chunk_index: int = 0                   # position within the document
     extra: Dict[str, Any] = field(default_factory=dict)
 
-
-# ---------------------------------------------------------------------------
-# Low-level text splitter (shared)
-# ---------------------------------------------------------------------------
 
 def _make_splitter(max_tokens: int = 512, overlap: int = 50) -> RecursiveCharacterTextSplitter:
     try:
@@ -67,10 +53,7 @@ def _split_text(text: str, max_tokens: int, overlap: int) -> List[str]:
         return [text[i: i + size] for i in range(0, len(text), step)]
 
 
-# ---------------------------------------------------------------------------
 # Structured chunking per source type
-# ---------------------------------------------------------------------------
-
 def chunk_pdf_pages(
     pages: List[str],
     max_tokens: int = 512,
@@ -147,10 +130,7 @@ def chunk_docx_sections(
     return chunks
 
 
-# ---------------------------------------------------------------------------
 # Legacy plain-text entry-point (kept for backward compatibility)
-# ---------------------------------------------------------------------------
-
 def chunk_text(text: str, max_tokens: int = 512, overlap: int = 50) -> List[ChunkData]:
     """Chunk a flat string.  Returns ChunkData list (no structural metadata)."""
     if not text or not text.strip():

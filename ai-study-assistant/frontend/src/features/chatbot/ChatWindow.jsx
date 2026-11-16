@@ -1,22 +1,92 @@
-import { useState } from "react";
-import { askQuestionStream } from "../../services/api";
+import { useEffect, useRef, useState } from "react";
+import Icon from "../../components/Icons";
+import { askQuestionStream, createConversation, getErrorMessage } from "../../services/api";
 
-export default function ChatWindow({ documentId = null }) {
-  const [messages, setMessages] = useState([]);
+// conversationId / initialMessages: saved conversation (null + [] = new conversation). App changes this component's `key`
+// when the user opens a different conversation, so these values only need to be read during initialization.
+export default function ChatWindow({
+  documentId = null,
+  scopeLabel = "Tất cả tài liệu",
+  hasDocuments = false,
+  conversationId = null,
+  initialMessages = [],
+  onConversationCreated = () => {},
+  onActivity = () => {},
+}) {
+  const [messages, setMessages] = useState(initialMessages);
+  const conversationRef = useRef(conversationId);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [steps, setSteps] = useState([]);
+  const textareaRef = useRef(null);
+  const scrollRef = useRef(null);
+  const wasLoading = useRef(false);
+  const abortRef = useRef(null);
+
+  // The input grows with its content (up to ~6 lines).
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+  }, [input]);
+
+  // Always scroll to the latest message; return focus to the input when the assistant finishes responding.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, steps, error]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (wasLoading.current && !isLoading) textareaRef.current?.focus();
+    wasLoading.current = isLoading;
+  }, [isLoading]);
+
+  // Include history so the server can rewrite follow-up questions ("what about that?") as standalone questions.
+  // Include only completed turns, up to the 6 most recent messages.
+  const buildHistory = () =>
+    messages
+      .filter((m) => m.content && !m.partial)
+      .slice(-6)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+  const handleStop = () => abortRef.current?.abort();
 
   const handleSend = async () => {
     const question = input.trim();
     if (!question || isLoading) return;
 
+    const history = buildHistory();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    // A new conversation is created on the server when the first message is sent. If creation fails, chat still works,
+    // but this conversation will not be saved.
+    let activeConversation = conversationRef.current;
+    let saveWarning = null;
+    if (!activeConversation) {
+      try {
+        const created = await createConversation(documentId);
+        activeConversation = created.data.id;
+        conversationRef.current = activeConversation;
+        onConversationCreated(activeConversation);
+      } catch (err) {
+        console.warn("Could not create a conversation; this chat will not be saved:", err?.message);
+        // Conversation limit reached (403): the assistant can still respond, but explain why this conversation was not saved.
+        if (err?.response?.status === 403) {
+          saveWarning = `${getErrorMessage(err, "")} Cuộc trò chuyện này sẽ không được lưu.`.trim();
+        }
+      }
+    }
+
     const userMessage = { role: "user", content: question };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
-    setError(null);
+    setError(saveWarning);
     setSteps([]);
 
     let collected = [];
@@ -28,40 +98,63 @@ export default function ChatWindow({ documentId = null }) {
       collected = i === -1 ? [...collected, step] : collected.map((s, j) => (j === i ? step : s));
       setSteps(collected);
     };
+    // If a streamed answer is stopped / errors, keep the received portion and mark it as "incomplete".
+    const markPartial = () => {
+      if (!streamingStarted) return;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        return last?.role === "assistant" && !last.citations
+          ? [...prev.slice(0, -1), { ...last, partial: true }]
+          : prev;
+      });
+    };
 
     try {
-      await askQuestionStream(question, documentId, (event) => {
-        if (event.type === "step") {
-          upsertStep(event);
-        } else if (event.type === "token") {
-          if (!streamingStarted) {
-            streamingStarted = true;
-            setMessages((prev) => [...prev, { role: "assistant", content: event.text }]);
-          } else {
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              return [...prev.slice(0, -1), { ...last, content: last.content + event.text }];
-            });
+      await askQuestionStream(
+        question,
+        documentId,
+        (event) => {
+          if (event.type === "step") {
+            upsertStep(event);
+          } else if (event.type === "token") {
+            if (!streamingStarted) {
+              streamingStarted = true;
+              setMessages((prev) => [...prev, { role: "assistant", content: event.text }]);
+            } else {
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                return [...prev.slice(0, -1), { ...last, content: last.content + event.text }];
+              });
+            }
+          } else if (event.type === "result") {
+            answered = true;
+            const { answer, citations, intent, cached } = event.data;
+            const finalMsg = { role: "assistant", content: answer, citations, intent, cached, steps: collected };
+            const wasStreaming = streamingStarted;
+            setMessages((prev) => (wasStreaming ? [...prev.slice(0, -1), finalMsg] : [...prev, finalMsg]));
+          } else if (event.type === "error") {
+            failed = true;
+            markPartial();
+            setError(event.detail);
           }
-        } else if (event.type === "result") {
-          answered = true;
-          const { answer, citations, intent } = event.data;
-          const finalMsg = { role: "assistant", content: answer, citations, intent, steps: collected };
-          const wasStreaming = streamingStarted;
-          setMessages((prev) => (wasStreaming ? [...prev.slice(0, -1), finalMsg] : [...prev, finalMsg]));
-        } else if (event.type === "error") {
-          failed = true;
-          setError(event.detail);
-        }
-      });;
+        },
+        { history, signal: controller.signal, conversationId: activeConversation }
+      );
       if (!answered && !failed) {
-        setError("No response received from the AI assistant.");
+        markPartial();
+        setError("Trợ lý không trả về câu trả lời. Vui lòng thử lại.");
       }
     } catch (err) {
-      setError(err.message || "An error occurred while connecting to the AI assistant.");
+      markPartial();
+      // The user clicked "Stop": this is not an error; keep only the received portion.
+      if (err?.name !== "AbortError") {
+        setError(err.message || "An error occurred while connecting to the AI assistant.");
+      }
     } finally {
+      abortRef.current = null;
       setIsLoading(false);
       setSteps([]);
+      if (activeConversation) onActivity(); // Refresh the list (updated title and most recent ordering).
     }
   };
 
@@ -72,69 +165,110 @@ export default function ChatWindow({ documentId = null }) {
     }
   };
 
+  const isEmpty = messages.length === 0 && !isLoading && !error;
+
   return (
-    <div style={styles.container}>
-      <div style={styles.messageList}>
-        {messages.length === 0 && (
-          <p style={styles.placeholder}>
-            Ask questions about the document you have uploaded to get started.
-          </p>
-        )}
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            style={{
-              ...styles.messageBubble,
-              ...(message.role === "user" ? styles.userBubble : styles.assistantBubble),
-            }}
-          >
-            <p style={styles.messageText}>{message.content}</p>
-            {message.steps && message.steps.length > 0 && (
-              <details style={styles.stepsDetails}>
-                <summary>Show steps</summary>
-                <StepList steps={message.steps} />
-              </details>
+    <div className={`chat${isEmpty ? " chat--empty" : ""}`}>
+      <div className="chat-scroll" ref={scrollRef}>
+        {isEmpty ? (
+          <div className="hero">
+            <h1 className="hero-title">Hôm nay bạn muốn ôn gì?</h1>
+            <p className="hero-sub">
+              {hasDocuments
+                ? "Hỏi bất kỳ điều gì về tài liệu đã tải lên."
+                : "Tải tài liệu lên ở thanh bên rồi đặt câu hỏi về nội dung."}
+            </p>
+          </div>
+        ) : (
+          <div className="chat-col">
+            {messages.map((message, index) =>
+              message.role === "user" ? (
+                <div key={index} className="msg-user">
+                  {message.content}
+                </div>
+              ) : (
+                <div key={index}>
+                  <div className="msg-ai">{message.content}</div>
+                  {message.partial && <p className="msg-extra">Câu trả lời chưa hoàn chỉnh (đã dừng hoặc bị gián đoạn).</p>}
+                  {message.cached && (
+                    <p className="msg-extra">Trả lời từ một câu hỏi tương tự đã hỏi trước đó.</p>
+                  )}
+                  {message.steps && message.steps.length > 0 && (
+                    <details className="msg-extra">
+                      <summary>Xem các bước xử lý</summary>
+                      <StepList steps={message.steps} />
+                    </details>
+                  )}
+                  {message.citations && message.citations.length > 0 && (
+                    <details className="msg-extra">
+                      <summary>Nguồn trích dẫn ({message.citations.length})</summary>
+                      <ul className="sources">
+                        {message.citations.map((citation, cIndex) => (
+                          <li key={cIndex} className="source">
+                            <b>[{citation.chunk_index}]</b>
+                            {citation.content.slice(0, 140)}
+                            {citation.content.length > 140 ? "…" : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )
             )}
-            {message.citations && message.citations.length > 0 && (
-              <div style={styles.citations}>
-                <span style={styles.citationsTitle}>Citations:</span>
-                <ul style={styles.citationList}>
-                  {message.citations.map((citation, cIndex) => (
-                    <li key={cIndex} style={styles.citationItem}>
-                      [{citation.chunk_index}] {citation.content.slice(0, 140)}
-                      {citation.content.length > 140 ? "…" : ""}
-                    </li>
-                  ))}
-                </ul>
+            {isLoading && (
+              <div className="live msg-extra" role="status">
+                {steps.length === 0 ? (
+                  <span className="step">
+                    <span className="spinner" /> Đang bắt đầu…
+                  </span>
+                ) : (
+                  <StepList steps={steps} />
+                )}
               </div>
             )}
-          </div>
-        ))}
-        {isLoading && (
-          <div style={styles.liveSteps}>
-            {steps.length === 0 ? <p style={styles.placeholder}>Starting…</p> : <StepList steps={steps} />}
+            {error && (
+              <p className="note note--err chat-error" role="alert">
+                {error}
+              </p>
+            )}
           </div>
         )}
-        {error && <p style={styles.error}>{error}</p>}
       </div>
 
-      <div style={styles.inputRow}>
-        <textarea
-          style={styles.textarea}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Enter your question…"
-          rows={2}
-          disabled={isLoading}
-        />
-        <button
-          style={styles.sendButton}
-          onClick={handleSend}
-          disabled={isLoading || !input.trim()}
-        >
-          Send
-        </button>
+      <div className="composer-wrap">
+        <div className="composer">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Đặt câu hỏi về tài liệu của bạn…"
+            aria-label="Câu hỏi"
+            rows={1}
+            disabled={isLoading}
+          />
+          <div className="composer-bar">
+            <span className="scope" title={scopeLabel}>
+              {scopeLabel}
+            </span>
+            {isLoading ? (
+              <button type="button" className="send" onClick={handleStop} aria-label="Dừng trả lời" title="Dừng">
+                <Icon name="stop" size={17} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="send"
+                onClick={handleSend}
+                disabled={!input.trim()}
+                aria-label="Gửi câu hỏi"
+              >
+                <Icon name="send" size={17} />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -142,89 +276,19 @@ export default function ChatWindow({ documentId = null }) {
 
 function StepList({ steps }) {
   return (
-    <ul style={styles.stepList}>
+    <ul className="steps">
       {steps.map((step) => (
-        <li key={step.id} style={styles.stepItem}>
-          <span style={styles.stepIcon}>{step.status === "done" ? "✓" : "…"}</span>
+        <li key={step.id} className="step">
+          {step.status === "done" ? <Icon name="check" size={14} /> : <span className="spinner" />}
           <span>
             {step.label}
             {step.status === "done" && step.ms != null && (
-              <span style={styles.stepMs}> · {step.ms < 1000 ? `${step.ms} ms` : `${(step.ms / 1000).toFixed(1)} s`}</span>
+              <span> · {step.ms < 1000 ? `${step.ms} ms` : `${(step.ms / 1000).toFixed(1)} s`}</span>
             )}
-            {step.detail && <div style={styles.stepDetail}>{step.detail}</div>}
+            {step.detail && <span className="step-detail">{step.detail}</span>}
           </span>
         </li>
       ))}
     </ul>
   );
 }
-
-const styles = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    border: "1px solid #e2e8f0",
-    borderRadius: "8px",
-    overflow: "hidden",
-  },
-  messageList: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "12px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-  },
-  placeholder: { color: "#94a3b8", fontStyle: "italic" },
-  liveSteps: { alignSelf: "flex-start", fontSize: "13px", color: "#475569" },
-  stepsDetails: { marginTop: "8px", fontSize: "12px", opacity: 0.85 },
-  stepList: { listStyle: "none", margin: "4px 0 0", padding: 0 },
-  stepItem: { display: "flex", gap: "6px", marginBottom: "4px" },
-  stepIcon: { width: "14px", flexShrink: 0 },
-  stepMs: { color: "#94a3b8" },
-  stepDetail: { color: "#64748b", fontSize: "12px", wordBreak: "break-word" },
-  error: { color: "#dc2626" },
-  messageBubble: {
-    maxWidth: "80%",
-    padding: "10px 12px",
-    borderRadius: "10px",
-  },
-  userBubble: {
-    alignSelf: "flex-end",
-    backgroundColor: "pink",
-    color: "#fff",
-  },
-  assistantBubble: {
-    alignSelf: "flex-start",
-    backgroundColor: "#f1f5f9",
-    color: "#0f172a",
-  },
-  messageText: { margin: 0, whiteSpace: "pre-wrap" },
-  citations: { marginTop: "8px", fontSize: "12px", opacity: 0.85 },
-  citationsTitle: { fontWeight: 600 },
-  citationList: { margin: "4px 0 0 16px", padding: 0 },
-  citationItem: { marginBottom: "4px" },
-  inputRow: {
-    display: "flex",
-    gap: "8px",
-    padding: "8px",
-    borderTop: "1px solid #e2e8f0",
-  },
-  textarea: {
-    flex: 1,
-    resize: "none",
-    padding: "8px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    fontFamily: "inherit",
-  },
-  sendButton: {
-    padding: "0 16px",
-    borderRadius: "6px",
-    border: "none",
-    backgroundColor: "pink",
-    color: "#fff",
-    cursor: "pointer",
-  },
-};

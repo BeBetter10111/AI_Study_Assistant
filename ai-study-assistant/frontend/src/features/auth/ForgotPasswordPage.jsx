@@ -1,0 +1,61 @@
+import { useState } from "react";
+import { forgotPassword, getErrorMessage } from "../../services/api";
+import { authStyles as styles } from "./authStyles";
+import AuthFooterLinks from "./AuthFooterLinks";
+
+// Step 1: enter an email address -> the backend emails a UUID code.
+export default function ForgotPasswordPage({ initialEmail = "", onCodeSent, onGoLogin, onGoSignup }) {
+  const [email, setEmail] = useState(initialEmail);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const value = email.trim();
+    if (!value || isLoading) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await forgotPassword(value);
+      // The backend always returns success (to avoid revealing whether an email exists) -> continue to code entry.
+      onCodeSent(value);
+    } catch (err) {
+      setError(getErrorMessage(err, "Could not send the code. Please try again."));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div style={styles.page}>
+      <h1 style={styles.appTitle}>AI Study Assistant</h1>
+      <div style={styles.card}>
+        <h2 style={styles.cardTitle}>Resetting your password</h2>
+        <p style={styles.cardSubtitle}>Enter your email below to reset your account&apos;s password</p>
+
+        <form onSubmit={handleSubmit} style={styles.form}>
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Email</label>
+            <input
+              style={styles.input}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              disabled={isLoading}
+              autoFocus
+            />
+          </div>
+
+          {error && <p style={styles.error}>{typeof error === "string" ? error : "Invalid email."}</p>}
+
+          <button type="submit" style={styles.submitButton} disabled={isLoading}>
+            {isLoading ? "Sending…" : "Reset Password"}
+          </button>
+        </form>
+
+        <AuthFooterLinks onGoLogin={onGoLogin} onGoSignup={onGoSignup} />
+      </div>
+    </div>
+  );
+}

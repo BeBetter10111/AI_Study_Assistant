@@ -4,7 +4,7 @@ target-version = "py312"
 exclude = ["scripts"]
 
 [tool.ruff.lint]
-# Bộ rule tối thiểu cho CI: lỗi cú pháp/logic rõ ràng (Pyflakes) + import
-# order (isort). Cố tình không bật các rule về style/format để không chặn
-# CI vì lý do thẩm mỹ trong giai đoạn dự án còn thay đổi nhiều.
+# Minimal CI rules: clear syntax/logic errors (Pyflakes) + import
+# ordering (isort). Style/formatting rules are intentionally disabled so CI is not blocked
+# for cosmetic reasons while the project is still changing rapidly.
 select = ["E9", "F", "I"]

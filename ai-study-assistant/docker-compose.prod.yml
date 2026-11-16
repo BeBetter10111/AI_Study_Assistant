@@ -1,0 +1,27 @@
+# Production deployment: the frontend is a static build served by non-root nginx (instead of the Vite dev server).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Alternatively, set this in .env:   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+# (Docker Compose >= 2.24 is required for the !reset / !override tags below)
+#
+# The API URL is baked into the bundle at build time: set VITE_API_BASE_URL (environment variable or .env) if
+# it differs from frontend/.env.local, for example: VITE_API_BASE_URL=https://api.example.com/api
+# Remember to add the frontend origin to the backend's ALLOWED_ORIGINS.
+services:
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    env_file: !reset []
+    volumes: !reset []
+    ports: !override
+      - "5173:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

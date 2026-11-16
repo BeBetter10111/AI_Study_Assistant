@@ -1,92 +1,194 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  registerUser,
-  loginUser,
+  getErrorMessage,
+  getMe,
   setAuthToken,
+  setUnauthorizedHandler,
   uploadDocument,
   getDocumentStatus,
+  listDocuments,
+  deleteDocument,
+  listConversations,
+  getConversation,
+  deleteConversation,
 } from "./services/api";
 import ChatWindow from "./features/chatbot/ChatWindow";
 import QuizPlayer from "./features/quiz/QuizPlayer";
 import FlashcardDeck from "./features/flashcard/FlashcardDeck";
+import LoginPage from "./features/auth/LoginPage";
+import SignupPage from "./features/auth/SignupPage";
+import ForgotPasswordPage from "./features/auth/ForgotPasswordPage";
+import VerifyCodePage from "./features/auth/VerifyCodePage";
+import ResetPasswordPage from "./features/auth/ResetPasswordPage";
+import ProfilePage from "./features/profile/ProfilePage";
+import SettingsPage from "./features/settings/SettingsPage";
+import Sidebar from "./components/Sidebar";
+import ConfirmDialog from "./components/ConfirmDialog";
+import Icon from "./components/Icons";
 
 const UPLOAD_CONCURRENCY = 3;
 const ALLOWED_EXT = /\.(pdf|docx|pptx|md)$/i;
 const DONE_STATUSES = ["embedded", "failed"];
 
-const TABS = [
-  { key: "chat", label: "Hỏi đáp" },
-  { key: "quiz", label: "Quiz" },
-  { key: "flashcard", label: "Thẻ ghi nhớ" },
-];
+// Screens available after login. Store the route in the URL hash (#/profile) so reloads stay on the same screen.
+const VIEWS = ["chat", "quiz", "flashcard", "profile", "settings"];
+const readView = () => {
+  const name = window.location.hash.replace(/^#\/?/, "");
+  return VIEWS.includes(name) ? name : "chat";
+};
 
-function LoginPanel({ onAuthenticated }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+// The server list is the source of truth; retain local-only items (uploading / failed uploads).
+const mergeServerDocs = (prev, docs) => {
+  const known = new Set(docs.map((d) => d.id));
+  const local = prev.filter((u) => !u.id || !known.has(u.id));
+  const server = docs.map((d) => ({ key: d.id, id: d.id, name: d.filename, status: d.status, error: null }));
+  return [...local, ...server];
+};
 
-  const handleAuth = async (action) => {
-    if (!email.trim() || !password.trim() || isLoading) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response =
-        action === "register"
-          ? await registerUser(email.trim(), password)
-          : await loginUser(email.trim(), password);
-      const { access_token: token } = response.data;
-      setAuthToken(token);
-      onAuthenticated(email.trim(), token);
-    } catch (err) {
-      setError(err.response?.data?.detail || "Log in/Sign up failed.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+// Convert server-stored messages to the format used by ChatWindow.
+const toUiMessage = (m) =>
+  m.role === "assistant"
+    ? { role: "assistant", content: m.content, citations: m.citations || [], intent: m.intent, cached: m.cached }
+    : { role: "user", content: m.content };
 
-  return (
-    <div style={styles.loginBox}>
-      <h2 style={{ marginTop: 0 }}>Log in / Sign up</h2>
-      <input
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <input
-        style={styles.input}
-        placeholder="Password (min 8 characters)"
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-      <div style={{ display: "flex", gap: "8px" }}>
-        <button style={styles.primaryButton} onClick={() => handleAuth("login")} disabled={isLoading}>
-          Log in
-        </button>
-        <button style={styles.secondaryButton} onClick={() => handleAuth("register")} disabled={isLoading}>
-          Sign up
-        </button>
-      </div>
-      {error && <p style={styles.error}>{error}</p>}
-    </div>
-  );
+const AUTH_SCREEN = {
+  LOGIN: "login",
+  SIGNUP: "signup",
+  FORGOT: "forgot",
+  VERIFY: "verify",
+  RESET: "reset",
+};
+
+function Navigate({ to, onNavigate }) {
+  useEffect(() => {
+    onNavigate(to);
+  }, [to, onNavigate]);
+  return null;
 }
 
 export default function App() {
-  const [userEmail, setUserEmail] = useState(null);
-  const [activeTab, setActiveTab] = useState("chat");
-  const [documentId, setDocumentId] = useState(null); // null = search all documents
-  const [uploads, setUploads] = useState([]); // [{key, name, id, status, error}]
+  const [userEmail, setUserEmail] = useState(() => {
+    const savedToken = localStorage.getItem("auth_token");
+    const savedEmail = localStorage.getItem("auth_email");
+    if (savedToken && savedEmail) {
+      setAuthToken(savedToken);
+      return savedEmail;
+    }
+    return null;
+  });
+  const [authScreen, setAuthScreen] = useState(AUTH_SCREEN.LOGIN);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetToken, setResetToken] = useState(null); 
+  const [loginNotice, setLoginNotice] = useState(null);
+  const [view, setView] = useState(readView);
+  const [navOpen, setNavOpen] = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null); // {type: "document" | "conversation", id, name}
+  const [notice, setNotice] = useState(null);
+  const [conversations, setConversations] = useState([]);
+  const [conversationId, setConversationId] = useState(null); // null = new conversation
+  const [initialMessages, setInitialMessages] = useState([]);
+  const [chatKey, setChatKey] = useState(0); // Changing this remounts ChatWindow with a different conversation.
+  const [profile, setProfile] = useState(null);
+  const [documentId, setDocumentId] = useState(null);
+  const [uploads, setUploads] = useState([]); 
 
-  const handleAuthenticated = (email) => setUserEmail(email);
+  useEffect(() => {
+    const onHash = () => setView(readView());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const navigate = (next) => {
+    setNavOpen(false);
+    window.location.hash = `/${next}`;
+  };
+
+  // Expired / revoked token (e.g. after changing the password elsewhere): return to the login screen.
+  const expireSession = useCallback(() => {
+    setAuthToken(null);
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_email");
+    setUserEmail(null);
+    setProfile(null);
+    setDocumentId(null);
+    setUploads([]);
+    setConversations([]);
+    setConversationId(null);
+    setInitialMessages([]);
+    setChatKey((k) => k + 1);
+    setResetToken(null);
+    setLoginNotice("Your session has expired. Please log in again.");
+    setAuthScreen(AUTH_SCREEN.LOGIN);
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(expireSession);
+    return () => setUnauthorizedHandler(null);
+  }, [expireSession]);
+
+  // Fetch the real profile (name, email, etc.) after login. The /auth/* endpoint is outside the shared 401 interceptor,
+  // so handle a 401 here separately: the token is no longer valid -> return to the login screen.
+  useEffect(() => {
+    if (!userEmail) return undefined;
+    let cancelled = false;
+    getMe()
+      .then((res) => {
+        if (!cancelled) setProfile(res.data);
+      })
+      .catch((err) => {
+        if (!cancelled && err?.response?.status === 401) expireSession();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail, expireSession]);
+
+  // A password change revokes the old token: accept the new token and preserve "Remember me" if enabled.
+  const handlePasswordChanged = (token) => {
+    setAuthToken(token);
+    if (localStorage.getItem("auth_token")) localStorage.setItem("auth_token", token);
+  };
+
+  const handleAuthenticated = (email, token) => {
+    if (token) setAuthToken(token);
+    setUserEmail(email);
+  };
+
+  const goLogin = (notice = null) => {
+    setLoginNotice(notice);
+    setResetToken(null);
+    setAuthScreen(AUTH_SCREEN.LOGIN);
+  };
+
+  const goSignup = () => {
+    setResetToken(null);
+    setAuthScreen(AUTH_SCREEN.SIGNUP);
+  };
+
+  const handleResetSuccess = () => {
+    setAuthToken(null);
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_email");
+    goLogin("Your password has been updated. Please log in with your new password.");
+  };
 
   const handleLogout = () => {
     setAuthToken(null);
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_email");
     setUserEmail(null);
+    setProfile(null);
     setDocumentId(null);
     setUploads([]);
+    setConversations([]);
+    setConversationId(null);
+    setInitialMessages([]);
+    setChatKey((k) => k + 1);
+    setNavOpen(false);
+    setConfirmingLogout(false);
+    setPendingDelete(null);
+    goLogin();
   };
 
   const updateUpload = (key, patch) =>
@@ -96,7 +198,7 @@ export default function App() {
     const files = Array.from(event.target.files || []).filter((f) =>
       ALLOWED_EXT.test(f.name)
     );
-    event.target.value = ""; // allow choosing the same files again
+    event.target.value = ""; 
     if (!files.length) return;
 
     const stamp = Date.now();
@@ -106,8 +208,8 @@ export default function App() {
       name: file.name,
     }));
     setUploads((prev) => [
-      ...prev,
       ...items.map(({ key, name }) => ({ key, name, id: null, status: "uploading", error: null })),
+      ...prev,
     ]);
 
     let next = 0;
@@ -120,7 +222,7 @@ export default function App() {
         } catch (err) {
           updateUpload(item.key, {
             status: "failed",
-            error: err.response?.data?.detail || "Failed to upload file.",
+            error: getErrorMessage(err, "Failed to upload file."),
           });
         }
       }
@@ -128,6 +230,91 @@ export default function App() {
     await Promise.all(
       Array.from({ length: Math.min(UPLOAD_CONCURRENCY, items.length) }, worker)
     );
+  };
+
+  const refreshConversations = useCallback(async () => {
+    try {
+      const res = await listConversations();
+      setConversations(res.data);
+    } catch {
+      /* The list is only a convenience; the next action will retry. */
+    }
+  }, []);
+
+  // After login (or a page reload), restore documents and conversations saved on the server.
+  useEffect(() => {
+    if (!userEmail) return undefined;
+    let cancelled = false;
+    listDocuments()
+      .then((res) => {
+        if (!cancelled) setUploads((prev) => mergeServerDocs(prev, res.data));
+      })
+      .catch(() => {
+        /* Keep the current list unchanged. */
+      });
+    refreshConversations();
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail, refreshConversations]);
+
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timer = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  const startNewChat = () => {
+    setConversationId(null);
+    setInitialMessages([]);
+    setChatKey((k) => k + 1);
+    navigate("chat");
+  };
+
+  const selectConversation = async (id) => {
+    navigate("chat");
+    if (id === conversationId) return;
+    try {
+      const res = await getConversation(id);
+      setInitialMessages(res.data.messages.map(toUiMessage));
+      setConversationId(id);
+      setDocumentId(res.data.document_id || null);
+      setChatKey((k) => k + 1);
+    } catch (err) {
+      setNotice(getErrorMessage(err, "Không mở được cuộc trò chuyện này."));
+      refreshConversations();
+    }
+  };
+
+  const requestDeleteDocument = (u) => {
+    if (!u.id) {
+      // Item not yet on the server (upload failed): just remove it from the list.
+      setUploads((prev) => prev.filter((x) => x.key !== u.key));
+      return;
+    }
+    setPendingDelete({ type: "document", id: u.id, name: u.name });
+  };
+
+  const requestDeleteConversation = (c) =>
+    setPendingDelete({ type: "conversation", id: c.id, name: c.title });
+
+  const confirmDelete = async () => {
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (!target) return;
+    try {
+      if (target.type === "document") {
+        await deleteDocument(target.id);
+        setUploads((prev) => prev.filter((u) => u.id !== target.id));
+        if (documentId === target.id) setDocumentId(null);
+      } else {
+        await deleteConversation(target.id);
+        setConversations((prev) => prev.filter((c) => c.id !== target.id));
+        if (conversationId === target.id) startNewChat();
+      }
+    } catch (err) {
+      setNotice(getErrorMessage(err, "Không xóa được. Vui lòng thử lại."));
+    }
   };
 
   useEffect(() => {
@@ -146,159 +333,192 @@ export default function App() {
     return () => clearInterval(timer);
   }, [uploads]);
 
-  const embeddedCount = uploads.filter((u) => u.status === "embedded").length;
 
   if (!userEmail) {
-    return (
-      <div style={styles.page}>
-        <LoginPanel onAuthenticated={handleAuthenticated} />
-      </div>
-    );
+    switch (authScreen) {
+      case AUTH_SCREEN.SIGNUP:
+        return (
+          <SignupPage
+            onGoLogin={(notice, email) => {
+              if (email) setResetEmail(email);
+              goLogin(notice);
+            }}
+          />
+        );
+
+      case AUTH_SCREEN.FORGOT:
+        return (
+          <ForgotPasswordPage
+            initialEmail={resetEmail}
+            onCodeSent={(email) => {
+              setResetEmail(email);
+              setAuthScreen(AUTH_SCREEN.VERIFY);
+            }}
+            onGoLogin={() => goLogin()}
+            onGoSignup={goSignup}
+          />
+        );
+
+      case AUTH_SCREEN.VERIFY:
+        if (!resetEmail) return <Navigate to={AUTH_SCREEN.FORGOT} onNavigate={setAuthScreen} />;
+        return (
+          <VerifyCodePage
+            email={resetEmail}
+            onVerified={(token) => {
+              setResetToken(token);
+              setAuthScreen(AUTH_SCREEN.RESET);
+            }}
+            onChangeEmail={() => setAuthScreen(AUTH_SCREEN.FORGOT)}
+            onGoLogin={() => goLogin()}
+            onGoSignup={goSignup}
+          />
+        );
+
+      case AUTH_SCREEN.RESET:
+        if (!resetToken) return <Navigate to={AUTH_SCREEN.FORGOT} onNavigate={setAuthScreen} />;
+        return (
+          <ResetPasswordPage
+            resetToken={resetToken}
+            onSuccess={handleResetSuccess}
+            onSessionExpired={() => {
+              setResetToken(null);
+              setAuthScreen(AUTH_SCREEN.FORGOT);
+            }}
+            onGoLogin={() => goLogin()}
+            onGoSignup={goSignup}
+          />
+        );
+
+      default:
+        return (
+          <LoginPage
+            key={loginNotice || "login"}
+            onAuthenticated={handleAuthenticated}
+            onGoSignup={goSignup}
+            onGoForgot={() => {
+              setLoginNotice(null);
+              setAuthScreen(AUTH_SCREEN.FORGOT);
+            }}
+            notice={loginNotice}
+            initialIdentifier={loginNotice ? resetEmail : ""}
+          />
+        );
+    }
   }
 
+  const scopeName = documentId ? uploads.find((u) => u.id === documentId)?.name : null;
+  const scopeLabel = scopeName || "Tất cả tài liệu";
+
   return (
-    <div style={styles.page}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>Explorer</h1>
-        <div>
-          <span style={{ marginRight: "12px" }}>{userEmail}</span>
-          <button style={styles.secondaryButton} onClick={handleLogout}>
-            Log out
+    <div className="app" data-nav={navOpen ? "open" : "closed"}>
+      <Sidebar
+        view={view}
+        onNavigate={navigate}
+        conversations={conversations}
+        conversationId={conversationId}
+        onNewChat={() => {
+          startNewChat();
+          setNavOpen(false);
+        }}
+        onSelectConversation={(id) => {
+          selectConversation(id);
+          setNavOpen(false);
+        }}
+        onDeleteConversation={requestDeleteConversation}
+        uploads={uploads}
+        documentId={documentId}
+        onSelectDocument={(id) => {
+          setDocumentId(id);
+          setNavOpen(false);
+        }}
+        onDeleteDocument={requestDeleteDocument}
+        onFiles={handleFilesChange}
+        profile={profile}
+        fallbackName={userEmail}
+        onLogout={() => setConfirmingLogout(true)}
+        onClose={() => setNavOpen(false)}
+      />
+      <div className="scrim" onClick={() => setNavOpen(false)} />
+
+      <div className="main">
+        <div className="topbar">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Mở thanh bên"
+            onClick={() => setNavOpen(true)}
+          >
+            <Icon name="menu" size={20} />
           </button>
+          <span className="brand">AI Study Assistant</span>
         </div>
-      </header>
 
-      <section style={styles.uploadRow}>
-        <input type="file" multiple accept=".pdf,.docx,.pptx,.md" onChange={handleFilesChange} />
-        <label style={styles.statusBadge}>
-          Folder:{" "}
-          <input type="file" multiple webkitdirectory="" onChange={handleFilesChange} />
-        </label>
-        {uploads.length > 0 && (
-          <span style={styles.statusBadge}>
-            {embeddedCount}/{uploads.length} ready
-          </span>
+        {/* Keep Q&A / Quiz / Flashcards in memory so their content is preserved when navigating between pages. */}
+        <main className="view view--chat" hidden={view !== "chat"}>
+          <ChatWindow
+            key={chatKey}
+            documentId={documentId}
+            scopeLabel={scopeLabel}
+            hasDocuments={uploads.length > 0}
+            conversationId={conversationId}
+            initialMessages={initialMessages}
+            onConversationCreated={setConversationId}
+            onActivity={refreshConversations}
+          />
+        </main>
+        <main className="view" hidden={view !== "quiz"}>
+          <QuizPlayer documentId={documentId} scopeLabel={scopeLabel} />
+        </main>
+        <main className="view" hidden={view !== "flashcard"}>
+          <FlashcardDeck documentId={documentId} scopeLabel={scopeLabel} />
+        </main>
+        {view === "profile" && (
+          <main className="view">
+            <ProfilePage profile={profile} onUpdated={setProfile} />
+          </main>
         )}
-        <select value={documentId || ""} onChange={(e) => setDocumentId(e.target.value || null)}>
-          <option value="">All documents</option>
-          {uploads
-            .filter((u) => u.status === "embedded")
-            .map((u) => (
-              <option key={u.key} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-        </select>
-      </section>
+        {view === "settings" && (
+          <main className="view">
+            <SettingsPage
+              profile={profile}
+              onPasswordChanged={handlePasswordChanged}
+              onLogout={() => setConfirmingLogout(true)}
+            />
+          </main>
+        )}
+      </div>
 
-      {uploads.length > 0 && (
-        <ul style={styles.uploadList}>
-          {uploads.map((u) => (
-            <li key={u.key} style={u.status === "failed" ? styles.error : undefined}>
-              {u.name} — {u.status}
-              {u.error ? `: ${u.error}` : ""}
-            </li>
-          ))}
-        </ul>
+      {confirmingLogout && (
+        <ConfirmDialog
+          title="Đăng xuất?"
+          message="Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng. Tài liệu và các cuộc trò chuyện của bạn vẫn được lưu."
+          confirmLabel="Đăng xuất"
+          danger
+          onConfirm={handleLogout}
+          onCancel={() => setConfirmingLogout(false)}
+        />
       )}
 
-      <nav style={styles.tabs}>
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            style={{
-              ...styles.tabButton,
-              ...(activeTab === tab.key ? styles.tabButtonActive : {}),
-            }}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+      {pendingDelete && (
+        <ConfirmDialog
+          title={pendingDelete.type === "document" ? "Xóa tài liệu?" : "Xóa cuộc trò chuyện?"}
+          message={
+            pendingDelete.type === "document"
+              ? `“${pendingDelete.name}” sẽ bị xóa cùng toàn bộ dữ liệu đã xử lý. Không thể hoàn tác. Lịch sử trò chuyện và quiz vẫn được giữ.`
+              : `Toàn bộ tin nhắn trong “${pendingDelete.name}” sẽ bị xóa. Không thể hoàn tác.`
+          }
+          confirmLabel="Xóa"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
 
-      <main style={styles.main}>
-        {activeTab === "chat" && <ChatWindow documentId={documentId} />}
-        {activeTab === "quiz" && <QuizPlayer documentId={documentId} />}
-        {activeTab === "flashcard" && <FlashcardDeck documentId={documentId} />}
-      </main>
+      {notice && (
+        <div className="toast" role="alert">
+          {notice}
+        </div>
+      )}
     </div>
   );
 }
-
-const styles = {
-  page: {
-    fontFamily: "system-ui, sans-serif",
-    maxWidth: "760px",
-    margin: "0 auto",
-    padding: "16px",
-    minHeight: "100vh",
-    boxSizing: "border-box",
-  },
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "12px",
-  },
-  title: { fontSize: "20px", margin: 0 },
-  loginBox: {
-    maxWidth: "320px",
-    margin: "80px auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    padding: "24px",
-    border: "1px solid #e2e8f0",
-    borderRadius: "10px",
-  },
-  input: {
-    padding: "8px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-  },
-  primaryButton: {
-    flex: 1,
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "none",
-    backgroundColor: "#2563eb",
-    color: "#fff",
-    cursor: "pointer",
-  },
-  secondaryButton: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#fff",
-    cursor: "pointer",
-  },
-  linkButton: {
-    marginLeft: "8px",
-    border: "none",
-    background: "none",
-    color: "#2563eb",
-    cursor: "pointer",
-    textDecoration: "underline",
-  },
-  error: { color: "#dc2626" },
-  uploadRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    marginBottom: "12px",
-    flexWrap: "wrap",
-  },
-  statusBadge: { fontSize: "14px", color: "#475569" },
-  uploadList: { fontSize: "13px", color: "#475569", margin: "0 0 12px", paddingLeft: "18px" },
-  tabs: { display: "flex", gap: "8px", marginBottom: "12px" },
-  tabButton: {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#fff",
-    cursor: "pointer",
-  },
-  tabButtonActive: { backgroundColor: "#2563eb", color: "#fff", borderColor: "#2563eb" },
-  main: { minHeight: "420px" },
-};

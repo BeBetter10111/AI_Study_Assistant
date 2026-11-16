@@ -26,7 +26,7 @@ def _install_stub(name: str, **attrs) -> types.ModuleType:
 
 def _install_heavy_stubs() -> None:
     if "torch" in sys.modules:
-        return  # đã stub từ trước (ví dụ khi chạy nhiều test module)
+        return  # Already stubbed (e.g. by another test module).
 
     class _Cuda:
         @staticmethod
@@ -117,10 +117,10 @@ def _install_heavy_stubs() -> None:
 
     _install_stub("langchain_text_splitters", RecursiveCharacterTextSplitter=_Splitter)
 
-    # Lưu ý: fitz (PyMuPDF), docx, pptx, pytesseract KHÔNG bị stub ở đây —
-    # đây là các gói nhẹ (không cần GPU), được cài thật qua
-    # requirements-ci.txt để tests/test_ingestion_ocr.py kiểm tra hành vi
-    # trích xuất/OCR THẬT thay vì hành vi giả.
+    # Note: fitz (PyMuPDF), docx, pptx, and pytesseract are NOT stubbed here —
+    # these lightweight packages (no GPU required) are installed through
+    # requirements-ci.txt so tests/test_ingestion_ocr.py checks REAL extraction/OCR behavior
+    # instead of mocked behavior.
 
 
 _install_heavy_stubs()

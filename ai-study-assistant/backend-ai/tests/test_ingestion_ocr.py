@@ -45,12 +45,12 @@ def test_pdf_with_no_text_layer_falls_back_to_ocr(tmp_path):
     doc.close()
 
     result = extract_text(str(pdf_path), "application/pdf")
-    # Không đòi hỏi OCR chính xác 100% (phụ thuộc font/chất lượng ảnh —
-    # font bitmap mặc định của PIL ở kích thước nhỏ có thể đọc nhầm vài
-    # ký tự, ví dụ "hoa" -> "hea") — chỉ cần xác nhận pipeline THỰC SỰ
-    # chạy OCR và trả về nội dung liên quan, thay vì "final_text rỗng"
-    # như trước khi có fallback. "NaCl" là chuỗi viết hoa/thường rõ ràng,
-    # ít bị OCR đọc nhầm hơn các từ tiếng Việt không dấu.
+    # Do not require 100% OCR accuracy (it depends on the font/image quality —
+    # PIL's default bitmap font at small sizes may misread a few
+    # characters, e.g. "hoa" -> "hea"). Just verify that the pipeline ACTUALLY
+    # runs OCR and returns relevant content instead of an empty "final_text"
+    # as it did before the fallback. "NaCl" has clear capitalization,
+    # making it less likely to be misread than unaccented Vietnamese words.
     assert result.strip() != ""
     assert "nacl" in result.lower()
 
@@ -69,7 +69,7 @@ def test_docx_paragraph_and_embedded_image_both_extracted(tmp_path):
     result = extract_text(str(docx_path), mime)
 
     assert "Ly thuyet co hoc co ban" in result
-    assert result.strip() != "Ly thuyet co hoc co ban"  # OCR text cũng phải có mặt
+    assert result.strip() != "Ly thuyet co hoc co ban"  # OCR text must be present too.
 
 
 def test_pptx_slide_text_and_embedded_image_both_extracted(tmp_path):
@@ -88,7 +88,7 @@ def test_pptx_slide_text_and_embedded_image_both_extracted(tmp_path):
     result = extract_text(str(pptx_path), mime)
 
     assert "Vat ly dai cuong" in result
-    assert result.strip() != "Vat ly dai cuong"  # OCR text cũng phải có mặt
+    assert result.strip() != "Vat ly dai cuong"  # OCR text must be present too.
 
 
 def test_ocr_failure_degrades_gracefully_without_crashing(tmp_path, monkeypatch):
@@ -109,7 +109,7 @@ def test_ocr_failure_degrades_gracefully_without_crashing(tmp_path, monkeypatch)
     doc.save(str(pdf_path))
     doc.close()
 
-    # Không raise exception — đây là điều quan trọng nhất cần test.
+    # Do not raise an exception — this is the most important behavior to test.
     result = extract_text(str(pdf_path), "application/pdf")
     assert result == ""
 

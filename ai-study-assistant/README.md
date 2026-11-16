@@ -15,7 +15,7 @@ cá nhân hóa lộ trình học bằng Reinforcement Learning.
 ## Chạy dự án
 
 ```bash
-cp .env .env.local   # chỉnh sửa giá trị thật
+cp .env .env.local   # Edit with your actual values.
 docker compose up --build
 ```
 
@@ -37,9 +37,9 @@ Tự động chấm faithfulness, answer_relevancy, context_precision, context_r
 (+ factual_correctness) và đo latency retrieval/generation trên bộ câu hỏi riêng.
 
 ```bash
-# 1. Tạo backend-ai/eval/eval_set.jsonl từ eval_set.example.jsonl
-#    (question, ground_truth, document_id = UUID tài liệu đã upload)
-# 2. Chạy trong container backend (cần Ollama + Qdrant đang chạy)
+# 1. Create backend-ai/eval/eval_set.jsonl from eval_set.example.jsonl
+#    (question, ground_truth, document_id = UUID of an uploaded document)
+# 2. Run inside the backend container (Ollama + Qdrant must be running)
 docker compose exec backend-ai python -m app.rag.evaluation eval/eval_set.jsonl --tag hybrid
 docker compose exec backend-ai python -m app.rag.evaluation eval/eval_set.jsonl --alpha 1.0 --tag dense-only
 docker compose exec backend-ai python -m app.rag.evaluation eval/eval_set.jsonl --no-rerank --tag no-rerank

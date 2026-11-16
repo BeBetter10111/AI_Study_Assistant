@@ -1,10 +1,10 @@
-# Bộ dependency NHẸ dùng riêng cho CI (lint + unit/integration test).
+# Lightweight dependencies used exclusively for CI (lint + unit/integration tests).
 #
-# requirements.txt đầy đủ có torch/vllm/outlines/sentence-transformers —
-# các gói này cần GPU và tải về hàng GB, không khả thi để cài trong mỗi lần
-# chạy CI trên GitHub-hosted runner. Thay vào đó, tests/conftest.py "giả"
-# (stub) các thư viện AI nặng đó, nên CI chỉ cần cài phần khung API + DB ở
-# đây là đủ để chạy toàn bộ test suite.
+# The full requirements.txt includes torch/vllm/outlines/sentence-transformers —
+# these packages need a GPU and download several gigabytes, which is impractical to install on every
+# CI run on a GitHub-hosted runner. Instead, tests/conftest.py stubs
+# these heavyweight AI libraries, so CI only needs the API + database foundation
+# installed here to run the full test suite.
 fastapi==0.115.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
@@ -20,6 +20,7 @@ python-multipart==0.0.9
 minio==7.2.9
 redis==5.0.8
 celery==5.4.0
+kombu==5.4.2
 httpx==0.27.2
 PyMuPDF==1.23.8
 python-docx==1.1.0
@@ -29,3 +30,6 @@ Pillow==10.4.0
 pytest==8.3.3
 pytest-asyncio==0.24.0
 ruff==0.6.9
+slowapi==0.1.9
+numpy==1.26.4
+fakeredis==2.26.1

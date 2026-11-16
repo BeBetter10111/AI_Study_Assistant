@@ -1,16 +1,24 @@
 import json
 import logging
+import re
 import time
+from contextlib import aclosing
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from starlette.concurrency import iterate_in_threadpool
 
+from app.api.dependencies import get_current_user
+from app.api.security.rate_limiter import limiter
 from app.config import settings
+from app.core import conversation_store
+from app.core.concurrency import LLM_BUSY, USER_BUSY, gate, llm_slot, too_busy, user_request
 from app.core.llm_engine import llm_engine
+from app.core.streaming import HEARTBEAT, SSE_KEEPALIVE, Done, aiter_blocking, run_with_heartbeat
+from app.models.models import User
+from app.rag.semantic_cache import semantic_cache
 from app.rag.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -27,6 +35,9 @@ IDENTITY_KEYWORDS = (
     "what are your boundaries", "what are your rules", "what are your guidelines",
     "what are your policies", "what are your procedures", "what are your protocols",
     "what are your standards", "what are your requirements", "what are your expectations", 
+    "who r u", "what r u", "ur name", "ur capabilities", "ur functions", "ur features",
+    "ur skills", "ur abilities", "ur strengths", "ur weaknesses", "ur limitations", "ur restrictions", "ur constraints", "ur boundaries", "ur rules",
+    "ur guidelines", "ur policies", "ur procedures", "ur protocols", "ur standards", "ur requirements", "ur expectations"
 )
 EXPLAIN_INTENT_KEYWORDS = (
     "explain", "giải thích", "please explain", "can you explain",
@@ -75,6 +86,8 @@ class QueryRequest(BaseModel):
     document_id: Optional[str] = None
     top_k: int = Field(default=3, ge=1, le=20)
     history: List[HistoryMessage] = Field(default_factory=list, max_length=20)
+    # When provided, history is loaded from the DB (more trustworthy than client-supplied `history`) and messages are saved.
+    conversation_id: Optional[str] = None
 
 
 class Citation(BaseModel):
@@ -95,17 +108,16 @@ class QueryResponse(BaseModel):
     citations: List[Citation]
     standalone_query: str  
     latency_ms: float
+    cached: bool = False  # True: served from the semantic cache (a similar question was already answered).
 
 def _is_identity_question(question: str) -> bool:
     lowered = question.lower().strip()
     return len(lowered) <= 80 and any(kw in lowered for kw in IDENTITY_KEYWORDS)
 
 def _identity_answer(question: str) -> str:
-    return IDENTITY_SYSTEM + "\n\n" + (
-        "I am an AI study assistant that can help you understand and review your uploaded documents. "
-        "You can ask me questions about the content, request summaries, explanations, or quizzes. "
-        "Please upload a document and ask me anything about it."
-    )
+    # IDENTITY_SYSTEM is already a complete answer; previously, an identical paragraph was appended,
+    # causing users to see the answer twice.
+    return IDENTITY_SYSTEM
 
 # Intent classification
 def _classify_intent(question: str) -> str:
@@ -123,7 +135,10 @@ def _classify_intent(question: str) -> str:
 
 
 # Conversational query rewriter
-
+_VAGUE_REFERENCE_RE = re.compile(
+    r"(?<!\w)(?:it|this|that|they|them|he|she|nó|đó|họ|điều này|vấn đề này)(?!\w)",
+    re.IGNORECASE,
+)
 _REWRITE_SYSTEM = (
     "You are a query rewriting assistant. "
     "Given a conversation history and a follow-up question, rewrite the follow-up "
@@ -145,16 +160,18 @@ def _rewrite_query(question: str, history: List[HistoryMessage]) -> str:
 
     # Simple heuristic: if the question has no pronouns / vague references,
     # it is likely already standalone.
-    vague_tokens = ("it", "this", "that", "they", "them", "he", "she",
-                    "nó", "đó", "họ", "điều này", "vấn đề này")
-    lowered = question.lower()
-    needs_rewrite = any(tok in lowered for tok in vague_tokens)
-    if not needs_rewrite:
+    # Match WHOLE WORDS. Previously, `tok in lowered` (substring matching) meant
+    # "it" matched "with"/"write", "he" matched "the", etc. -> the LLM was always called to rewrite unnecessarily.
+    if not _VAGUE_REFERENCE_RE.search(question):
         return question
 
     # Build a short history string (last 6 turns max to keep prompt short)
     recent = history[-6:]
-    history_text = "\n".join(f"{m.role.capitalize()}: {m.content}" for m in recent)
+    # The previous answer can be very long; keep only enough context to resolve pronouns -> smaller prompt and faster rewrite.
+    def _short(text: str, limit: int = 600) -> str:
+        return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+    history_text = "\n".join(f"{m.role.capitalize()}: {_short(m.content)}" for m in recent)
     prompt = (
         f"Conversation history:\n{history_text}\n\n"
         f"Follow-up question: {question}\n\n"
@@ -240,7 +257,7 @@ def _build_prompts(intent: str, hits: List[Dict[str, Any]], standalone_query: st
     if intent == "explanation":
         return _EXPLAIN_SYSTEM, f"Context snippets:\n{context}\n\nRequest: {standalone_query}"
     if intent == "identity":
-        return _IDENTITY_SYSTEM, f"Context snippets:\n{context}\n\nRequest: {standalone_query}"
+        return IDENTITY_SYSTEM, f"Context snippets:\n{context}\n\nRequest: {standalone_query}"
     return _QA_SYSTEM, f"Context snippets:\n{context}\n\nQuestion: {standalone_query}"
 
 
@@ -263,7 +280,14 @@ def _build_citations(hits: List[Dict[str, Any]]) -> List[Citation]:
 
 # Main endpoint
 @router.post("/query", response_model=QueryResponse)
-async def query(payload: QueryRequest):
+@limiter.limit("30/minute")
+async def query(request: Request, payload: QueryRequest, current_user: User = Depends(get_current_user)):
+    # Limit the number of concurrent Q&A requests per user (see app/core/concurrency.py).
+    with user_request(str(current_user.id)):
+        return await _query(payload, current_user)
+
+
+async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
     question = payload.question.strip()
     if not question:
         raise HTTPException(
@@ -300,11 +324,17 @@ async def query(payload: QueryRequest):
         _rewrite_query, question, payload.history
     )
 
-    # 2. Hybrid (dense + BM25) search; fetch_k/alpha come from settings
-    hits = vector_store.search_similar_chunks(
+    # 2. Hybrid (dense + BM25) search scoped to the calling user's documents.
+    #    owner_id ensures a user can never read chunks belonging to another user.
+    #    Run in a thread pool: embedding + Qdrant + re-ranker are synchronous/CPU-intensive;
+    #    calling them directly in `async def` would block the event loop (all other requests, including login
+    #    and /health, would stall while the query runs).
+    hits = await run_in_threadpool(
+        vector_store.search_similar_chunks,
         query=standalone_query,
         limit=payload.top_k,
         document_id=payload.document_id,
+        owner_id=str(current_user.id),
     )
 
     if not hits:
@@ -322,11 +352,12 @@ async def query(payload: QueryRequest):
 
     system_prompt, user_prompt = _build_prompts(intent, hits, standalone_query)
 
-    answer = await run_in_threadpool(
-        llm_engine.generate_rag_response,
-        prompt=user_prompt,
-        system_prompt=system_prompt,
-    )
+    with llm_slot():  # No slot available => 429 "busy" instead of an unbounded queue.
+        answer = await run_in_threadpool(
+            llm_engine.generate_rag_response,
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+        )
 
     latency_ms = (time.perf_counter() - start_time) * 1000
     if latency_ms > settings.max_response_latency_ms:
@@ -365,20 +396,49 @@ _INTENT_LABELS = {
 
 
 @router.post("/query/stream")
-async def query_stream(payload: QueryRequest):
+@limiter.limit("30/minute")
+async def query_stream(request: Request, payload: QueryRequest, current_user: User = Depends(get_current_user)):
     """Same pipeline as ``/query`` but streams Server-Sent Events:
 
     * ``{"type": "step", "id", "label", "status": "running"|"done", "detail"?, "ms"?}``
     * ``{"type": "token", "text"}``  (one per generated token/chunk, before the result)
     * ``{"type": "result", "data": <QueryResponse>}``  (always last on success)
-    * ``{"type": "error", "detail"}``
+    * ``{"type": "error", "detail"}``  (always last on failure)
+    * comment lines ``: keep-alive`` while waiting (clients ignore them)
 
     All intents that need the LLM (qa, explanation, summarization) share the same
-    path: rewrite -> search -> streamed generation.
+    path: rewrite -> semantic-cache lookup -> search -> streamed generation -> cache store.
+
+    If the client disconnects (closed tab / "Stop" button) the LLM stream is closed too, so the model
+    stops generating for nobody.
     """
     question = payload.question.strip()
     if not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question cannot be empty.")
+
+    # Capture owner_id from the authenticated user for use inside the closure.
+    owner_id = str(current_user.id)
+    heartbeat_s = settings.sse_heartbeat_s if settings.sse_heartbeat_s > 0 else None
+
+    # Too many concurrent requests for this user => return a real 429 (with Retry-After) BEFORE starting the stream.
+    # (The actual slot is acquired in events(): if the client disconnects before the stream starts, nothing is leaked.)
+    if not gate.user_has_room(owner_id):
+        raise too_busy(USER_BUSY)
+
+    # Check the conversation BEFORE starting the stream so a proper 404 is returned (also when it belongs to someone else).
+    conversation_id: Optional[str] = None
+    if payload.conversation_id:
+        conversation = await conversation_store.get_owned(payload.conversation_id, owner_id)
+        if conversation is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+        if (settings.max_messages_per_conversation > 0
+                and conversation["message_count"] >= settings.max_messages_per_conversation):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This conversation has reached its limit of {settings.max_messages_per_conversation} "
+                       "messages. Please start a new conversation.",
+            )
+        conversation_id = str(conversation["id"])
 
     async def events():
         start_time = time.perf_counter()
@@ -389,27 +449,53 @@ async def query_stream(payload: QueryRequest):
             step_started = time.perf_counter()
             return _sse({"type": "step", "id": step_id, "label": label, "status": "running"})
 
-        def done(step_id: str, label: str, detail: Optional[str] = None) -> str:
-            ms = round((time.perf_counter() - step_started) * 1000)
+        def done(step_id: str, label: str, detail: Optional[str] = None, ms: Optional[int] = None) -> str:
+            if ms is None:
+                ms = round((time.perf_counter() - step_started) * 1000)
             return _sse({"type": "step", "id": step_id, "label": label,
                          "status": "done", "detail": detail, "ms": ms})
 
-        def final(intent: str, answer: str, citations: List[Citation], standalone_query: str) -> str:
+        def final(intent: str, answer: str, citations: List[Citation], standalone_query: str,
+                  cached: bool = False) -> str:
             response = QueryResponse(
                 intent=intent, answer=answer, citations=citations,
                 standalone_query=standalone_query,
                 latency_ms=(time.perf_counter() - start_time) * 1000,
+                cached=cached,
             )
             return _sse({"type": "result", "data": response.model_dump()})
 
+        async def finish(intent: str, answer: str, citations: List[Citation], standalone_query: str,
+                         cached: bool = False) -> str:
+            """Lưu câu trả lời vào lịch sử (nếu có hội thoại) rồi tạo frame `result`."""
+            if conversation_id:
+                await conversation_store.append_message(
+                    conversation_id, owner_id, "assistant", answer,
+                    citations=[c.model_dump() for c in citations], intent=intent, cached=cached,
+                )
+            return final(intent, answer, citations, standalone_query, cached=cached)
+
+        user_lease = gate.try_acquire_user(owner_id)
+        if user_lease is None:  # Rare race between checking and acquiring a slot; report the error through the stream.
+            yield _sse({"type": "error", "detail": USER_BUSY})
+            return
+        llm_lease = None
+        history: List[Any] = list(payload.history)
         try:
+            if conversation_id:
+                # Fetch history BEFORE saving the current question so it does not appear in its own context.
+                stored = await conversation_store.recent_history(conversation_id, owner_id)
+                history = [HistoryMessage(**m) for m in stored]
+                await conversation_store.append_message(
+                    conversation_id, owner_id, "user", question, title_from=question
+                )
             intent = _classify_intent(question)
             yield running("intent", "Understanding your question")
             yield done("intent", "Understanding your question", _INTENT_LABELS.get(intent, intent))
 
             # Fast paths: no retrieval, no LLM call.
             if intent == "quiz_generation":
-                yield final(
+                yield await finish(
                     intent,
                     "To create a quiz, please use the 'Create Quiz' feature "
                     "and select the topic you want to review.",
@@ -418,27 +504,62 @@ async def query_stream(payload: QueryRequest):
                 return
 
             if intent == "identity":
-                yield final(intent, _identity_answer(question), [], question)
+                yield await finish(intent, _identity_answer(question), [], question)
                 return
 
             # 1. Rewrite follow-up question (only when there is history)
             standalone_query = question
-            if payload.history:
+            if history:
                 yield running("rewrite", "Rewriting your follow-up as a standalone question")
-                standalone_query = await run_in_threadpool(_rewrite_query, question, payload.history)
+                async for tick in run_with_heartbeat(
+                    _rewrite_query, question, history, interval=heartbeat_s
+                ):
+                    if tick is HEARTBEAT:
+                        yield SSE_KEEPALIVE
+                    elif isinstance(tick, Done):
+                        standalone_query = tick.value
                 yield done("rewrite", "Rewriting your follow-up as a standalone question",
                            standalone_query if standalone_query != question else "No rewrite needed")
 
-            # 2. Hybrid search + re-rank
+            # 2. Semantic cache: a similar question (same user, same scope) was already answered.
+            #    Fail-open: any cache problem simply means "miss".
+            cache_started = time.perf_counter()
+            cache_session = await semantic_cache.open(
+                owner_id, payload.document_id, intent, payload.top_k, standalone_query
+            )
+            hit = await cache_session.lookup() if cache_session else None
+            if hit is not None:
+                cached = hit.payload
+                yield running("cache", "Looking for a similar question I already answered")
+                yield done(
+                    "cache", "Looking for a similar question I already answered",
+                    f"Reused an earlier answer ({hit.similarity:.0%} similar)",
+                    ms=round((time.perf_counter() - cache_started) * 1000),
+                )
+                yield await finish(
+                    intent, cached["answer"],
+                    [Citation(**c) for c in cached.get("citations", [])],
+                    standalone_query, cached=True,
+                )
+                return
+
+            # 3. Hybrid search + re-rank — scoped to the authenticated user's documents
             yield running("search", "Searching your document")
-            hits = await run_in_threadpool(
+            hits: List[Dict[str, Any]] = []
+            async for tick in run_with_heartbeat(
                 vector_store.search_similar_chunks,
+                interval=heartbeat_s,
                 query=standalone_query, limit=payload.top_k,
                 document_id=payload.document_id,
-            )
+                owner_id=owner_id,
+            ):
+                if tick is HEARTBEAT:
+                    yield SSE_KEEPALIVE
+                elif isinstance(tick, Done):
+                    hits = tick.value
             if not hits:
                 yield done("search", "Searching your document", "No matching passages found")
-                yield final(
+                yield await finish(
                     intent,
                     "No relevant content found in the uploaded document. "
                     "Please upload study materials before asking questions.",
@@ -450,28 +571,58 @@ async def query_stream(payload: QueryRequest):
             yield done("search", "Searching your document",
                        f"Found {len(hits)} relevant passage(s): {labels}")
 
-            # 3. Streamed generation (qa / explanation / summarization)
+            # 4. Streamed generation (qa / explanation / summarization)
             system_prompt, user_prompt = _build_prompts(intent, hits, standalone_query)
             gen_label = f"Writing the answer with {_active_model_name()}"
+            llm_lease = gate.try_acquire_llm()
+            if llm_lease is None:
+                # This is not a real answer: do not save or cache it; the user can simply retry after a few seconds.
+                yield _sse({"type": "error", "detail": LLM_BUSY})
+                return
             yield running("generate", gen_label)
             parts: List[str] = []
-            async for ev in iterate_in_threadpool(
-                llm_engine.stream_rag_response(user_prompt, system_prompt)
-            ):
-                if "token" in ev:
-                    parts.append(ev["token"])
-                    yield _sse({"type": "token", "text": ev["token"]})
+            failure: Optional[str] = None
+            async with aclosing(aiter_blocking(
+                llm_engine.stream_rag_response(user_prompt, system_prompt), heartbeat_s
+            )) as stream:
+                async for ev in stream:
+                    if ev is HEARTBEAT:
+                        yield SSE_KEEPALIVE
+                    elif "error" in ev:
+                        failure = str(ev["error"])
+                        break
+                    elif "token" in ev:
+                        parts.append(ev["token"])
+                        yield _sse({"type": "token", "text": ev["token"]})
             answer = "".join(parts).strip()
+            if failure is None and not answer:
+                failure = "The model returned an empty answer. Please try again."
+            if failure is not None:
+                # Not a real answer: never cached, and the UI shows it as an error.
+                yield _sse({"type": "error", "detail": failure})
+                return
             yield done("generate", gen_label)
 
             latency_ms = (time.perf_counter() - start_time) * 1000
             if latency_ms > settings.max_response_latency_ms:
                 logger.warning(f"Query latency {latency_ms:.0f}ms exceeds threshold "
                                f"{settings.max_response_latency_ms}ms")
-            yield final(intent, answer, _build_citations(hits), standalone_query)
+            citations = _build_citations(hits)
+            if cache_session is not None:  # only complete, grounded answers are cached
+                await cache_session.store({
+                    "answer": answer,
+                    "citations": [c.model_dump() for c in citations],
+                    "standalone_query": standalone_query,
+                })
+            yield await finish(intent, answer, citations, standalone_query)
         except Exception as exc:
             logger.exception("Streaming query failed")
             yield _sse({"type": "error", "detail": f"Something went wrong while answering: {exc}"})
+        finally:
+            # Runs even if the client disconnects (the generator is closed/cancelled) => always release the slot.
+            if llm_lease is not None:
+                llm_lease.release()
+            user_lease.release()
 
     return StreamingResponse(
         events(),
