@@ -10,6 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.agent.router import RouteDecision, classify_route, run_route_tools
 from app.api.dependencies import get_current_user
 from app.api.security.rate_limiter import limiter
 from app.config import settings
@@ -18,6 +19,7 @@ from app.core.concurrency import LLM_BUSY, USER_BUSY, gate, llm_slot, too_busy, 
 from app.core.llm_engine import llm_engine
 from app.core.streaming import HEARTBEAT, SSE_KEEPALIVE, Done, aiter_blocking, run_with_heartbeat
 from app.models.models import User
+from app.rag import knowledge_graph
 from app.rag.semantic_cache import semantic_cache
 from app.rag.vector_store import vector_store
 
@@ -109,6 +111,10 @@ class QueryResponse(BaseModel):
     standalone_query: str  
     latency_ms: float
     cached: bool = False  # True: served from the semantic cache (a similar question was already answered).
+    domain: str = "general"
+    tts_text: str = ""          # corrected / target text the client may speak (language route)
+    tool_used: Optional[str] = None
+
 
 def _is_identity_question(question: str) -> bool:
     lowered = question.lower().strip()
@@ -119,19 +125,40 @@ def _identity_answer(question: str) -> str:
     # causing users to see the answer twice.
     return IDENTITY_SYSTEM
 
-# Intent classification
+# Intent classification (delegates to agentic router; keeps old name for evaluation.py)
 def _classify_intent(question: str) -> str:
-    """Keyword-based intent router — zero extra LLM calls."""
-    lowered = question.lower()
-    if _is_identity_question(question):
-        return "identity"
-    if any(kw in lowered for kw in QUIZ_KEYWORDS):
-        return "quiz_generation"
-    if any(kw in lowered for kw in SUMMARY_KEYWORDS):
-        return "summarization"
-    if any(kw in lowered for kw in EXPLAIN_INTENT_KEYWORDS):
-        return "explanation"
-    return "qa"
+    """Domain-aware router — keyword first, optional LLM when ``router_llm_enabled``."""
+    return classify_route(question).intent
+
+
+def _chat_intent(route: RouteDecision) -> str:
+    """Map tool domains onto the RAG prompt family (math/language still use qa prompts)."""
+    if route.intent in ("math", "language"):
+        return "qa"
+    return route.intent
+
+
+def _enrich_with_kg_and_tools(
+    system_prompt: str,
+    user_prompt: str,
+    standalone_query: str,
+    owner_id: str,
+    document_id: Optional[str],
+    route: RouteDecision,
+) -> tuple[str, str]:
+    """Append knowledge-graph facts and tool outputs to the user prompt."""
+    extras: List[str] = []
+    if route.tool_context:
+        extras.append(route.tool_context)
+    facts = knowledge_graph.facts_for_query(
+        standalone_query, owner_id=owner_id, document_id=document_id,
+    )
+    block = knowledge_graph.format_facts_block(facts)
+    if block:
+        extras.append(block)
+    if not extras:
+        return system_prompt, user_prompt
+    return system_prompt, user_prompt + "\n\n" + "\n\n".join(extras)
 
 
 # Conversational query rewriter
@@ -241,7 +268,10 @@ IDENTITY_SYSTEM = (
     "- Answer questions from your documents, with page/slide/section citations.\n"
     "- Summarize and explain the content.\n"
     "- Generate multiple-choice quizzes and flashcards by topic.\n"
-    "- Adjust exercise difficulty based on your quiz results.\n\n"
+    "- Adjust exercise difficulty based on your quiz results.\n"
+    "- Solve math expressions with a built-in calculator (SymPy).\n"
+    "- Correct grammar / wording for language practice (and return text for pronunciation).\n"
+    "- Show concept relations from your documents as a knowledge-graph mindmap.\n\n"
     "Upload a document and ask me anything about it."
 )
 
@@ -296,7 +326,10 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
         )
 
     start_time = time.perf_counter()
-    intent = _classify_intent(question)
+    owner_id = str(current_user.id)
+    route = await run_in_threadpool(run_route_tools, question)
+    intent = route.intent
+    tool_name = route.tools[0].name if route.tools else None
 
     # Fast-path for quiz intent — redirect user to dedicated feature
     if intent == "quiz_generation":
@@ -310,6 +343,8 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
             citations=[],
             standalone_query=question,
             latency_ms=latency_ms,
+            domain=route.domain,
+            tool_used=tool_name,
         )
 
     if intent == "identity":
@@ -317,6 +352,22 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
             intent=intent, answer=_identity_answer(question), citations=[],
             standalone_query=question,
             latency_ms=(time.perf_counter() - start_time) * 1000,
+            domain=route.domain,
+        )
+
+    # Pure tool answer when calculator / language tool succeeded and no doc scope is required.
+    # Word problems with an uploaded document still go through RAG with the tool block attached.
+    if intent in ("math", "language") and route.tools and route.tools[0].ok and not payload.document_id:
+        tool = route.tools[0]
+        return QueryResponse(
+            intent=intent,
+            answer=tool.display or tool.prompt_block,
+            citations=[],
+            standalone_query=question,
+            latency_ms=(time.perf_counter() - start_time) * 1000,
+            domain=route.domain,
+            tts_text=route.tts_text,
+            tool_used=tool.name,
         )
 
     # 1. Conversational query rewrite (run in threadpool — LLM call)
@@ -334,10 +385,23 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
         query=standalone_query,
         limit=payload.top_k,
         document_id=payload.document_id,
-        owner_id=str(current_user.id),
+        owner_id=owner_id,
     )
 
     if not hits:
+        # Tool still useful even when retrieval misses (e.g. pure calc with a selected doc that has no match).
+        if route.tools and route.tools[0].ok:
+            tool = route.tools[0]
+            return QueryResponse(
+                intent=intent,
+                answer=tool.display or tool.prompt_block,
+                citations=[],
+                standalone_query=standalone_query,
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                domain=route.domain,
+                tts_text=route.tts_text,
+                tool_used=tool.name,
+            )
         latency_ms = (time.perf_counter() - start_time) * 1000
         return QueryResponse(
             intent=intent,
@@ -348,9 +412,15 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
             citations=[],
             standalone_query=standalone_query,
             latency_ms=latency_ms,
+            domain=route.domain,
+            tool_used=tool_name,
         )
 
-    system_prompt, user_prompt = _build_prompts(intent, hits, standalone_query)
+    rag_intent = _chat_intent(route)
+    system_prompt, user_prompt = _build_prompts(rag_intent, hits, standalone_query)
+    system_prompt, user_prompt = _enrich_with_kg_and_tools(
+        system_prompt, user_prompt, standalone_query, owner_id, payload.document_id, route,
+    )
 
     with llm_slot():  # No slot available => 429 "busy" instead of an unbounded queue.
         answer = await run_in_threadpool(
@@ -374,6 +444,9 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
         citations=citations,
         standalone_query=standalone_query,
         latency_ms=latency_ms,
+        domain=route.domain,
+        tts_text=route.tts_text,
+        tool_used=tool_name,
     )
 
 
@@ -392,6 +465,8 @@ _INTENT_LABELS = {
     "explanation": "Explanation",
     "quiz_generation": "Quiz request",
     "identity": "About the assistant",
+    "math": "Math / calculation",
+    "language": "Language practice",
 }
 
 
@@ -455,13 +530,19 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
             return _sse({"type": "step", "id": step_id, "label": label,
                          "status": "done", "detail": detail, "ms": ms})
 
+        route_box: Dict[str, Any] = {"route": RouteDecision(intent="qa")}
+
         def final(intent: str, answer: str, citations: List[Citation], standalone_query: str,
                   cached: bool = False) -> str:
+            route: RouteDecision = route_box["route"]
             response = QueryResponse(
                 intent=intent, answer=answer, citations=citations,
                 standalone_query=standalone_query,
                 latency_ms=(time.perf_counter() - start_time) * 1000,
                 cached=cached,
+                domain=route.domain,
+                tts_text=route.tts_text,
+                tool_used=route.tools[0].name if route.tools else None,
             )
             return _sse({"type": "result", "data": response.model_dump()})
 
@@ -489,9 +570,19 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 await conversation_store.append_message(
                     conversation_id, owner_id, "user", question, title_from=question
                 )
-            intent = _classify_intent(question)
+            route = RouteDecision(intent="qa")
+            async for tick in run_with_heartbeat(run_route_tools, question, interval=heartbeat_s):
+                if tick is HEARTBEAT:
+                    yield SSE_KEEPALIVE
+                elif isinstance(tick, Done):
+                    route = tick.value
+            route_box["route"] = route
+            intent = route.intent
             yield running("intent", "Understanding your question")
-            yield done("intent", "Understanding your question", _INTENT_LABELS.get(intent, intent))
+            detail = _INTENT_LABELS.get(intent, intent)
+            if route.tools:
+                detail = f"{detail} · tool={route.tools[0].name}"
+            yield done("intent", "Understanding your question", detail)
 
             # Fast paths: no retrieval, no LLM call.
             if intent == "quiz_generation":
@@ -505,6 +596,11 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
 
             if intent == "identity":
                 yield await finish(intent, _identity_answer(question), [], question)
+                return
+
+            if intent in ("math", "language") and route.tools and route.tools[0].ok and not payload.document_id:
+                tool = route.tools[0]
+                yield await finish(intent, tool.display or tool.prompt_block, [], question)
                 return
 
             # 1. Rewrite follow-up question (only when there is history)
@@ -522,11 +618,15 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                            standalone_query if standalone_query != question else "No rewrite needed")
 
             # 2. Semantic cache: a similar question (same user, same scope) was already answered.
-            #    Fail-open: any cache problem simply means "miss".
+            #    Fail-open: any cache problem simply means "miss".  Tool routes skip the cache
+            #    so calculator / grammar results stay fresh.
             cache_started = time.perf_counter()
-            cache_session = await semantic_cache.open(
-                owner_id, payload.document_id, intent, payload.top_k, standalone_query
-            )
+            cache_intent = _chat_intent(route)
+            cache_session = None
+            if intent not in ("math", "language"):
+                cache_session = await semantic_cache.open(
+                    owner_id, payload.document_id, cache_intent, payload.top_k, standalone_query
+                )
             hit = await cache_session.lookup() if cache_session else None
             if hit is not None:
                 cached = hit.payload
@@ -558,6 +658,11 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 elif isinstance(tick, Done):
                     hits = tick.value
             if not hits:
+                if route.tools and route.tools[0].ok:
+                    tool = route.tools[0]
+                    yield done("search", "Searching your document", "No passages — using tool result")
+                    yield await finish(intent, tool.display or tool.prompt_block, [], standalone_query)
+                    return
                 yield done("search", "Searching your document", "No matching passages found")
                 yield await finish(
                     intent,
@@ -571,8 +676,11 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
             yield done("search", "Searching your document",
                        f"Found {len(hits)} relevant passage(s): {labels}")
 
-            # 4. Streamed generation (qa / explanation / summarization)
-            system_prompt, user_prompt = _build_prompts(intent, hits, standalone_query)
+            # 4. Streamed generation (qa / explanation / summarization / tool-augmented)
+            system_prompt, user_prompt = _build_prompts(cache_intent, hits, standalone_query)
+            system_prompt, user_prompt = _enrich_with_kg_and_tools(
+                system_prompt, user_prompt, standalone_query, owner_id, payload.document_id, route,
+            )
             gen_label = f"Writing the answer with {_active_model_name()}"
             llm_lease = gate.try_acquire_llm()
             if llm_lease is None:

@@ -106,6 +106,59 @@ class Settings(BaseSettings):
 
     allowed_origins: str = "http://localhost:5173"
 
+    # ===================== Multi-domain extensions (all optional) =====================
+    # --- STEM: formula-aware PDF extraction (Markdown + LaTeX) ---
+    # "none" (PyMuPDF text, current behaviour) | "marker" | "nougat" | "vlm".
+    stem_extraction_backend: str = "none"
+    # Pages whose math score is >= this threshold are sent to the extractor (0..1).
+    stem_math_score_threshold: float = 0.15
+    # Send EVERY page to the extractor (slow); otherwise only math-looking pages.
+    stem_extract_all_pages: bool = False
+    # Vision-language model used by the "vlm" backend.
+    vlm_provider: str = "ollama"            # "ollama" | "openai" (any OpenAI-compatible server, e.g. vLLM)
+    vlm_base_url: str = ""                  # empty -> OLLAMA_BASE_URL (ollama) / https://api.openai.com (openai)
+    vlm_model: str = "qwen2.5vl:7b"
+    vlm_api_key: str = "not-needed"
+    vlm_timeout_s: float = 180.0
+    vlm_max_pages: int = 60                 # cap per document (cost / latency guard)
+    vlm_dpi: int = 150
+    nougat_cmd: str = "nougat"
+    nougat_timeout_s: float = 900.0
+
+    # --- Law / administration: hierarchical chunking (Phần > Chương > Mục > Điều > Khoản) ---
+    legal_chunking_mode: str = "auto"       # "auto" (detect) | "on" | "off"
+    legal_min_articles: int = 3             # auto-detect: minimum number of "Điều N." headings
+    # At query time, pull sibling clauses of every retrieved article (keeps exceptions/conditions).
+    rag_legal_expand_article: bool = True
+    rag_legal_expand_max_chunks: int = 6    # extra chunks added per answer (token budget guard)
+
+    # --- Medicine / life sciences: entity linking & query expansion ---
+    query_expansion_enabled: bool = True
+    query_expansion_max_terms: int = 8
+    medical_lexicon_paths: str = ""         # comma-separated extra JSON/CSV lexicons (e.g. converted MeSH)
+    umls_api_key: str = ""                  # optional UMLS UTS key; empty = lexicon only
+    umls_timeout_s: float = 2.0
+
+    # --- GraphRAG (knowledge graph / mindmap) ---
+    kg_enabled: bool = False
+    kg_backend: str = "postgres"            # "postgres" | "neo4j" (requires the `neo4j` driver)
+    kg_use_llm: bool = True                 # False -> heuristic extraction only (no LLM call at ingestion)
+    kg_max_chunks_per_doc: int = 40
+    kg_batch_size: int = 4
+    kg_hops: int = 1
+    kg_max_facts: int = 12
+    neo4j_uri: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
+
+    # --- Agentic router & tools ---
+    router_enabled: bool = True
+    router_llm_enabled: bool = False        # one extra structured-output LLM call for ambiguous questions
+    math_tool_enabled: bool = True
+    math_tool_timeout_s: float = 3.0
+    language_tool_enabled: bool = True
+    languagetool_url: str = ""              # e.g. http://languagetool:8010 ; empty -> LLM-based correction
+
     # RAGAS evaluation 
     # Judge LLM: "ollama" (default, reuses OLLAMA_BASE_URL) or "openai" (any
     # OpenAI-compatible server: vLLM, OpenAI, ...).  A judge stronger than the

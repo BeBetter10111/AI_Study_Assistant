@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import docx
 import fitz
@@ -12,6 +12,8 @@ from PIL import Image
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+from app.config import settings
+from app.rag import formula_extraction, legal_parser
 from app.rag.chunking import (
     ChunkData,
     chunk_docx_sections,
@@ -62,6 +64,62 @@ def _extract_pdf_pages(file_path: str) -> List[str]:
             else:
                 pages.append("")   # blank page placeholder keeps index stable
     return pages
+
+
+def _extract_pdf_pages_rich(file_path: str) -> Tuple[List[str], Set[int]]:
+    """Pages + the 0-based indices that were converted to Markdown/LaTeX.
+
+    Formula-aware extraction (``STEM_EXTRACTION_BACKEND``) replaces only math pages; any backend
+    failure keeps the plain/OCR text of that page.
+    """
+    pages = _extract_pdf_pages(file_path)
+    try:
+        converted = formula_extraction.extract_formula_pages(file_path, len(pages))
+    except Exception as exc:  # noqa: BLE001 - never fail ingestion because of the optional backend
+        logger.warning(f"Formula-aware extraction skipped: {exc}")
+        converted = {}
+    for idx, markdown in converted.items():
+        pages[idx] = markdown
+    if converted:
+        logger.info(f"Formula-aware extraction converted {len(converted)} page(s) to Markdown/LaTeX.")
+    return pages, set(converted)
+
+
+def _join_with_offsets(parts: List[str]) -> Tuple[str, List[int]]:
+    offsets: List[int] = []
+    pos = 0
+    for part in parts:
+        offsets.append(pos)
+        pos += len(part) + 1  # "\n" separator
+    return "\n".join(parts), offsets
+
+
+def _maybe_legal_chunks(text: str, page_offsets: Optional[List[int]] = None) -> Optional[List[ChunkData]]:
+    """Hierarchical (Điều/Khoản) chunks when the document is legal text; None = use default chunking."""
+    mode = (settings.legal_chunking_mode or "auto").strip().lower()
+    if mode in ("off", "false", "none"):
+        return None
+    if mode != "on" and not legal_parser.is_legal_document(text, settings.legal_min_articles):
+        return None
+    try:
+        chunks = legal_parser.chunk_legal_text(text, page_offsets)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Legal parsing failed, falling back to default chunking: {exc}")
+        return None
+    if chunks:
+        logger.info(f"Legal document detected: {len(chunks)} article/clause chunks.")
+    return chunks or None
+
+
+def _section_text(sections: List[Dict[str, Any]]) -> str:
+    """Re-join DOCX/MD sections INCLUDING headings (Điều lines are often styled as headings)."""
+    parts = []
+    for s in sections:
+        if s.get("heading"):
+            parts.append(s["heading"])
+        if s.get("text"):
+            parts.append(s["text"])
+    return "\n".join(parts)
 
 
 def _extract_docx_sections(file_path: str) -> List[Dict[str, Any]]:
@@ -222,8 +280,12 @@ def extract_and_chunk(file_path: str, mime_type: str) -> List[ChunkData]:
     """
     try:
         if "pdf" in mime_type.lower() or file_path.lower().endswith(".pdf"):
-            pages = _extract_pdf_pages(file_path)
-            detail_chunks = chunk_pdf_pages(pages)
+            pages, markdown_pages = _extract_pdf_pages_rich(file_path)
+            joined, offsets = _join_with_offsets(pages)
+            legal_chunks = _maybe_legal_chunks(joined, offsets)
+            if legal_chunks:
+                return legal_chunks
+            detail_chunks = chunk_pdf_pages(pages, markdown_pages=markdown_pages)
             # Build per-page summaries
             summary_chunks: List[ChunkData] = []
             idx_offset = len(detail_chunks)
@@ -247,6 +309,9 @@ def extract_and_chunk(file_path: str, mime_type: str) -> List[ChunkData]:
                 sections = _extract_md_sections(file_path)
             else:
                 sections = _extract_docx_sections(file_path)
+            legal_chunks = _maybe_legal_chunks(_section_text(sections))
+            if legal_chunks:
+                return legal_chunks
             detail_chunks = chunk_docx_sections(sections)
             summary_chunks = []
             idx_offset = len(detail_chunks)
@@ -298,7 +363,7 @@ def extract_text(file_path: str, mime_type: str) -> str:
     """
     try:
         if "pdf" in mime_type.lower() or file_path.lower().endswith(".pdf"):
-            pages = _extract_pdf_pages(file_path)
+            pages, _ = _extract_pdf_pages_rich(file_path)
             return "\n".join(pages).strip()
         elif _is_markdown(file_path, mime_type):
             sections = _extract_md_sections(file_path)

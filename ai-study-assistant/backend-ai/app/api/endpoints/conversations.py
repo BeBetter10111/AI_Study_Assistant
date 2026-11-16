@@ -1,4 +1,3 @@
-"""Lịch sử hội thoại: liệt kê, tạo, đọc, đổi tên, xóa. Mọi thao tác đều giới hạn trong user hiện tại."""
 import json
 import logging
 import uuid

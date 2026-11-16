@@ -137,3 +137,32 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now())
 
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class KGNode(Base):
+    """Concept of the knowledge graph extracted from one document (GraphRAG / mindmap)."""
+
+    __tablename__ = "kg_nodes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    norm_name = Column(String(255), nullable=False, index=True)   # accent-folded, lower-cased (dedup key)
+    type = Column(String(64), nullable=True)
+    chunk_indices = Column(Text, nullable=False, default="[]")   # JSON list of chunk indices mentioning it
+
+
+class KGEdge(Base):
+    __tablename__ = "kg_edges"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    source_id = Column(UUID(as_uuid=True), ForeignKey("kg_nodes.id", ondelete="CASCADE"), nullable=False)
+    target_id = Column(UUID(as_uuid=True), ForeignKey("kg_nodes.id", ondelete="CASCADE"), nullable=False)
+    relation = Column(String(128), nullable=False, default="related_to")
+    weight = Column(Float, nullable=False, default=1.0)
+    chunk_index = Column(Integer, nullable=True)

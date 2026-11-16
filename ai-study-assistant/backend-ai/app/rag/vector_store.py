@@ -168,6 +168,34 @@ def _title_of(payload: Dict[str, Any]) -> Optional[str]:
     return payload.get("slide_title") or payload.get("section_title")
 
 
+# Domain metadata from ChunkData.extra persisted in the Qdrant payload (whitelist).
+EXTRA_PAYLOAD_KEYS = ("content_format", "domain", "hierarchy_path", "article_key", "article", "clause")
+
+
+def hit_from_payload(payload: Dict[str, Any], score: float = 0.0) -> Dict[str, Any]:
+    """Search-result dict (same shape for search hits and legal sibling expansion)."""
+    hit = {
+        "content": payload.get("content", ""),
+        "document_id": payload.get("document_id", ""),
+        "chunk_index": payload.get("chunk_index", 0),
+        "page_number": payload.get("page_number"),
+        "slide_number": payload.get("slide_number"),
+        "slide_title": payload.get("slide_title"),
+        "section_title": payload.get("section_title"),
+        "is_summary": payload.get("is_summary", False),
+        "score": score,
+    }
+    for key in EXTRA_PAYLOAD_KEYS:
+        hit[key] = payload.get(key)
+    return hit
+
+
+def expanded_query_text(query: str, expansion_terms: Optional[List[str]]) -> str:
+    """Query text used for retrieval when entity linking added synonyms (brand -> ingredient ...)."""
+    terms = [t for t in (expansion_terms or []) if t and t.lower() not in query.lower()]
+    return f"{query} ({'; '.join(terms)})" if terms else query
+
+
 class VectorStoreManager:
     """Manages Qdrant collection, multilingual embeddings, hybrid search, re-ranking."""
 
@@ -231,6 +259,7 @@ class VectorStoreManager:
                     )
                 except Exception as exc:
                     logger.warning(f"Could not create payload index on owner_id: {exc}")
+                self._ensure_article_index()
                 logger.info(f"Created Qdrant collection '{self.collection_name}' "
                             f"(dense={self.VECTOR_SIZE}, sparse={SPARSE_NAME}).")
                 return
@@ -250,9 +279,23 @@ class VectorStoreManager:
                     f"Delete the collection and re-upload your documents."
                 )
             logger.info(f"Qdrant collection '{self.collection_name}' already exists.")
+            self._ensure_article_index()
         except Exception as e:
             logger.error(f"Error initialising Qdrant collection: {e}")
             raise
+
+    def _ensure_article_index(self) -> None:
+        """Keyword index for legal sibling-clause lookups (idempotent, best effort)."""
+        try:
+            from qdrant_client.http import models
+
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="article_key",
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Payload index on article_key not created: {exc}")
 
     # Upsert — accepts ChunkData objects with rich metadata
     def upsert_chunks(
@@ -311,6 +354,10 @@ class VectorStoreManager:
                     payload["slide_title"] = chunk.slide_title
                 if chunk.section_title:
                     payload["section_title"] = chunk.section_title
+                for key in EXTRA_PAYLOAD_KEYS:
+                    value = chunk.extra.get(key)
+                    if value is not None and value != "":
+                        payload[key] = value
 
                 vectors: Dict[str, Any] = {DENSE_NAME: vector.tolist()}
                 s_idx, s_val = hybrid.sparse_document_vector(
@@ -365,6 +412,7 @@ class VectorStoreManager:
         owner_id: Optional[str] = None,
         fetch_k: Optional[int] = None,
         alpha: Optional[float] = None,
+        expansion_terms: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Hybrid dense + BM25 retrieval, RRF fusion, cross-encoder re-ranking.
 
@@ -383,10 +431,14 @@ class VectorStoreManager:
         :param alpha: Weight of the dense leg in the fusion, 0..1
                       (default ``settings.rag_hybrid_alpha``; 1.0 = dense only,
                       0.0 = BM25 only)
+        :param expansion_terms: Synonyms / canonical names from entity linking (e.g. the active
+                      ingredient of a brand-name drug). Added to the dense, BM25 and re-ranker
+                      query text; the caller keeps the original query for caching/prompting.
         :return: Result dicts sorted by relevance; ``score`` is in [0, 1].
         """
         if not query or not query.strip():
             return []
+        query = expanded_query_text(query, expansion_terms)
         limit = max(1, limit)
         fetch_k = max(limit, fetch_k if fetch_k is not None else settings.rag_fetch_k)
         alpha = min(1.0, max(0.0, settings.rag_hybrid_alpha if alpha is None else alpha))
@@ -450,14 +502,7 @@ class VectorStoreManager:
                     key = str(hit.id)
                     keys.append(key)
                     cand = pool.setdefault(key, {
-                        "content": hit.payload.get("content", ""),
-                        "document_id": hit.payload.get("document_id", ""),
-                        "chunk_index": hit.payload.get("chunk_index", 0),
-                        "page_number": hit.payload.get("page_number"),
-                        "slide_number": hit.payload.get("slide_number"),
-                        "slide_title": hit.payload.get("slide_title"),
-                        "section_title": hit.payload.get("section_title"),
-                        "is_summary": hit.payload.get("is_summary", False),
+                        **hit_from_payload(hit.payload),
                         "vector_score": None,
                         "bm25_score": None,
                     })
@@ -505,6 +550,81 @@ class VectorStoreManager:
         except Exception as e:
             logger.error(f"Error querying Qdrant: {e}")
             return []
+
+    # Legal: pull the sibling clauses of every retrieved article
+    def expand_legal_articles(
+        self,
+        hits: List[Dict[str, Any]],
+        owner_id: Optional[str] = None,
+        max_extra: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return ``hits`` where each retrieved legal article is completed with its other clauses.
+
+        A clause alone often lacks the condition / exception stated in a sibling clause
+        ("... except as provided in clause 3"). Chunks of one article are grouped together in
+        clause order at the position of the article's best hit; non-legal hits are untouched.
+        At most ``max_extra`` chunks are added (``RAG_LEGAL_EXPAND_MAX_CHUNKS``). Fail-open.
+        """
+        budget = settings.rag_legal_expand_max_chunks if max_extra is None else max_extra
+        if budget <= 0 or not any(h.get("article_key") for h in hits):
+            return hits
+        try:
+            from qdrant_client.http import models as qdrant_models
+
+            self._ensure_collection()
+            seen = {(h.get("document_id"), h.get("chunk_index")) for h in hits}
+            groups: Dict[tuple, List[Dict[str, Any]]] = {}
+            out: List[Any] = []
+            for hit in hits:
+                akey = hit.get("article_key")
+                if not akey:
+                    out.append(hit)
+                    continue
+                gkey = (hit.get("document_id"), akey)
+                if gkey in groups:
+                    groups[gkey].append(hit)
+                    continue
+                groups[gkey] = [hit]
+                out.append(gkey)  # placeholder: the article group goes here
+                if budget <= 0:
+                    continue
+                must = [
+                    qdrant_models.FieldCondition(key="document_id",
+                                                 match=qdrant_models.MatchValue(value=str(gkey[0]))),
+                    qdrant_models.FieldCondition(key="article_key",
+                                                 match=qdrant_models.MatchValue(value=str(akey))),
+                ]
+                if owner_id:
+                    must.append(qdrant_models.FieldCondition(
+                        key="owner_id", match=qdrant_models.MatchValue(value=str(owner_id))))
+                points, _ = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=qdrant_models.Filter(must=must),
+                    limit=64, with_payload=True, with_vectors=False,
+                )
+                siblings = sorted(
+                    (p.payload for p in points if p.payload and not p.payload.get("is_summary")),
+                    key=lambda p: p.get("chunk_index", 0),
+                )
+                for payload in siblings:
+                    ident = (payload.get("document_id"), payload.get("chunk_index"))
+                    if ident in seen or budget <= 0:
+                        continue
+                    seen.add(ident)
+                    budget -= 1
+                    sibling = hit_from_payload(payload, score=float(hit.get("score", 0.0)))
+                    sibling["expanded"] = True
+                    groups[gkey].append(sibling)
+            result: List[Dict[str, Any]] = []
+            for item in out:
+                if isinstance(item, tuple):
+                    result.extend(sorted(groups[item], key=lambda h: h.get("chunk_index", 0)))
+                else:
+                    result.append(item)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Legal article expansion failed, using plain hits: {exc}")
+            return hits
 
 
 # Module-level singleton

@@ -49,6 +49,10 @@ onnx==1.17.0
 # pyairports==0.0.1
 numpy==1.26.4
 pyarrow==21.0.0
+# Agentic math tool (app/agent/tools/math_tool.py) — SymPy calculator for STEM questions.
+sympy==1.13.3
+# Optional GraphRAG Neo4j mirror (only when KG_BACKEND=neo4j and NEO4J_URI is set).
+# neo4j==5.25.0
 
 requests==2.31.0
 

@@ -1,12 +1,68 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
+
+# Content format of chunks produced from formula-aware extraction (Markdown + LaTeX).
+MARKDOWN_LATEX = "markdown_latex"
+
+# Math blocks that must never be cut in half by the splitter (order matters: longest first).
+_MATH_BLOCK_RE = re.compile(
+    r"\$\$.+?\$\$"                                   # $$ display $$
+    r"|\\\[.+?\\\]"                                  # \[ display \]
+    r"|\\begin\{([A-Za-z]+\*?)\}.+?\\end\{\1\}"        # \begin{env} ... \end{env}
+    r"|(?<![\\$])\$(?!\$)[^$\n]{1,300}?(?<![\\$])\$(?!\$)",  # inline $...$
+    re.DOTALL,
+)
+_PH_OPEN, _PH_CLOSE = "\ue000", "\ue001"
+_PH_RE = re.compile(f"{_PH_OPEN}(\\d+){_PH_CLOSE}")
+
+
+def protect_math(text: str) -> tuple[str, List[str]]:
+    """Replace math blocks with short separator-free placeholders."""
+    blocks: List[str] = []
+
+    def _sub(m: re.Match) -> str:
+        blocks.append(m.group(0))
+        return f"{_PH_OPEN}{len(blocks) - 1}{_PH_CLOSE}"
+
+    if "$" not in text and "\\" not in text:
+        return text, blocks
+    return _MATH_BLOCK_RE.sub(_sub, text), blocks
+
+
+def restore_math(text: str, blocks: List[str]) -> str:
+    if not blocks:
+        return text
+    return _PH_RE.sub(lambda m: blocks[int(m.group(1))], text)
+
+
+_encoder = None
+_encoder_failed = False
+
+
+def count_tokens(text: str) -> int:
+    """cl100k token count (same unit as the splitter); ~4 chars/token if tiktoken is missing."""
+    global _encoder, _encoder_failed
+    if not _encoder_failed and _encoder is None:
+        try:
+            import tiktoken
+
+            _encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:  # noqa: BLE001
+            _encoder_failed = True
+    if _encoder is not None:
+        try:
+            return len(_encoder.encode(text or ""))
+        except Exception:  # noqa: BLE001
+            pass
+    return (len(text or "") + 3) // 4
 
 
 @dataclass
@@ -38,19 +94,26 @@ def _make_splitter(max_tokens: int = 512, overlap: int = 50) -> RecursiveCharact
 
 
 def _split_text(text: str, max_tokens: int, overlap: int) -> List[str]:
-    """Split a single text block into sub-chunks, filter noise."""
+    """Split a single text block into sub-chunks, filter noise.
+
+    Math-aware: LaTeX blocks (``$$..$$``, ``\\[..\\]``, ``\\begin{env}..\\end{env}``, inline ``$..$``)
+    are swapped for placeholders before splitting and restored afterwards, so a formula is never
+    split across two chunks (a chunk may slightly exceed ``max_tokens`` to keep it whole).
+    """
     if not text or not text.strip():
         return []
+    protected, blocks = protect_math(text)
     try:
         splitter = _make_splitter(max_tokens, overlap)
-        pieces = splitter.split_text(text)
-        return [p.strip() for p in pieces if len(p.strip()) > 15]
+        pieces = splitter.split_text(protected)
     except Exception as e:
         logger.error(f"Chunking error: {e}")
-        # character fallback
+        # character fallback (placeholders may be cut here; restore_math then leaves them as-is)
         size = max(max_tokens * 4, 1)
         step = max(size - overlap * 4, 1)
-        return [text[i: i + size] for i in range(0, len(text), step)]
+        pieces = [protected[i: i + size] for i in range(0, len(protected), step)]
+    restored = [restore_math(p, blocks).strip() for p in pieces]
+    return [p for p in restored if len(p) > 15]
 
 
 # Structured chunking per source type
@@ -58,18 +121,26 @@ def chunk_pdf_pages(
     pages: List[str],
     max_tokens: int = 512,
     overlap: int = 50,
+    markdown_pages: Optional[Collection[int]] = None,
 ) -> List[ChunkData]:
-    """One chunk group per PDF page; pages that are too long are split further."""
+    """One chunk group per PDF page; pages that are too long are split further.
+
+    ``markdown_pages`` (0-based) are pages produced by formula-aware extraction; their chunks are
+    tagged ``extra["content_format"] = "markdown_latex"``.
+    """
+    markdown_pages = set(markdown_pages or ())
     chunks: List[ChunkData] = []
     global_idx = 0
     for page_num, page_text in enumerate(pages, start=1):
         sub_texts = _split_text(page_text, max_tokens, overlap)
+        extra = {"content_format": MARKDOWN_LATEX} if (page_num - 1) in markdown_pages else {}
         for sub in sub_texts:
             chunks.append(
                 ChunkData(
                     content=sub,
                     page_number=page_num,
                     chunk_index=global_idx,
+                    extra=dict(extra),
                 )
             )
             global_idx += 1

@@ -223,6 +223,71 @@ async def get_document_status(
     }
 
 
+class MindmapNode(BaseModel):
+    id: str
+    name: str
+    type: str = "concept"
+    chunk_indices: List[int] = []
+
+
+class MindmapEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    relation: str
+    weight: float = 1.0
+    chunk_index: Optional[int] = None
+
+
+class MindmapResponse(BaseModel):
+    document_id: str
+    enabled: bool
+    nodes: List[MindmapNode]
+    edges: List[MindmapEdge]
+    stats: dict
+
+
+@router.get("/{document_id}/mindmap", response_model=MindmapResponse)
+@limiter.limit("30/minute")
+async def get_document_mindmap(
+    request: Request,
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Knowledge-graph mindmap for one owned document (GraphRAG). Empty when KG is off or not built yet."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="document_id is not a valid UUID."
+        ) from exc
+
+    document = (await db.execute(
+        select(Document).where(Document.id == doc_uuid, Document.owner_id == current_user.id)
+    )).scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+
+    if not settings.kg_enabled:
+        return MindmapResponse(
+            document_id=str(document.id), enabled=False, nodes=[], edges=[], stats={"nodes": 0, "edges": 0},
+        )
+
+    from app.rag import knowledge_graph
+
+    graph = await run_in_threadpool(
+        knowledge_graph.mindmap_for_document, str(document.id), str(current_user.id),
+    )
+    return MindmapResponse(
+        document_id=str(document.id),
+        enabled=True,
+        nodes=[MindmapNode(**n) for n in graph.get("nodes") or []],
+        edges=[MindmapEdge(**e) for e in graph.get("edges") or []],
+        stats=graph.get("stats") or {"nodes": 0, "edges": 0},
+    )
+
+
 # List & delete documents
 LIST_LIMIT = 200
 # A document left "pending" longer than this is assumed to have been abandoned by a worker -> allow deletion to unblock it.

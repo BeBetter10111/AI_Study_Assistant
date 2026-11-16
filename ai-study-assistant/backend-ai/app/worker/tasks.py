@@ -57,6 +57,19 @@ def task_process_document(self, document_id: str, storage_path: str, mime_type: 
         # Pass owner_id so every Qdrant point carries the owner for access-control filtering.
         vector_store.upsert_chunks(chunks, document_id, owner_id=owner_id or None)
 
+        # GraphRAG: extract concept relations after vectors are stored (fail-open inside).
+        try:
+            from app.rag import knowledge_graph
+
+            kg_stats = knowledge_graph.build_and_store(chunks, document_id, owner_id or "")
+            if kg_stats.get("nodes"):
+                logger.info(
+                    "Document %s knowledge graph: %s nodes, %s edges",
+                    document_id, kg_stats.get("nodes"), kg_stats.get("edges"),
+                )
+        except Exception as kg_exc:  # noqa: BLE001
+            logger.warning("Knowledge-graph build skipped for %s: %s", document_id, kg_exc)
+
         invalidate_owner_sync(owner_id)
         _update_document_status(document_id, "embedded")
         logger.info(
