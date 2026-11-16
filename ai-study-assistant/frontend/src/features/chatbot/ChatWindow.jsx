@@ -1,9 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import Icon from "../../components/Icons";
-import { askQuestionStream } from "../../services/api";
+import { askQuestionStream, createConversation } from "../../services/api";
 
-export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả tài liệu", hasDocuments = false }) {
-  const [messages, setMessages] = useState([]);
+// conversationId / initialMessages: hội thoại đã lưu (null + [] = cuộc trò chuyện mới). App đổi `key` của
+// component này khi người dùng mở hội thoại khác, nên các giá trị này chỉ cần đọc lúc khởi tạo.
+export default function ChatWindow({
+  documentId = null,
+  scopeLabel = "Tất cả tài liệu",
+  hasDocuments = false,
+  conversationId = null,
+  initialMessages = [],
+  onConversationCreated = () => {},
+  onActivity = () => {},
+}) {
+  const [messages, setMessages] = useState(initialMessages);
+  const conversationRef = useRef(conversationId);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -51,6 +62,20 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
     const history = buildHistory();
     const controller = new AbortController();
     abortRef.current = controller;
+
+    // Hội thoại mới được tạo (ở server) ngay khi gửi câu đầu tiên. Nếu tạo lỗi thì vẫn chat được,
+    // chỉ là lần này không được lưu lại.
+    let activeConversation = conversationRef.current;
+    if (!activeConversation) {
+      try {
+        const created = await createConversation(documentId);
+        activeConversation = created.data.id;
+        conversationRef.current = activeConversation;
+        onConversationCreated(activeConversation);
+      } catch (err) {
+        console.warn("Could not create a conversation; this chat will not be saved:", err?.message);
+      }
+    }
 
     const userMessage = { role: "user", content: question };
     setMessages((prev) => [...prev, userMessage]);
@@ -108,7 +133,7 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
             setError(event.detail);
           }
         },
-        { history, signal: controller.signal }
+        { history, signal: controller.signal, conversationId: activeConversation }
       );
       if (!answered && !failed) {
         markPartial();
@@ -124,6 +149,7 @@ export default function ChatWindow({ documentId = null, scopeLabel = "Tất cả
       abortRef.current = null;
       setIsLoading(false);
       setSteps([]);
+      if (activeConversation) onActivity(); // làm mới danh sách (tiêu đề tự đặt, thứ tự mới nhất)
     }
   };
 

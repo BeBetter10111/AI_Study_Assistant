@@ -12,12 +12,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db
-from app.api.endpoints import auth, chat, documents, quiz
+from app.api.endpoints import auth, chat, conversations, documents, quiz
 from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core.database import engine
 from app.core.llm_engine import llm_engine
 from app.core.schema import ensure_schema
+from app.core.security_check import enforce_jwt_secret
 from app.rag import vector_store as vs
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,9 @@ class UnhandledErrorMiddleware:
 
 @asynccontextmanager
 async def lifespan(_app):
+    # Fail-fast: JWT_SECRET mặc định/yếu => ai cũng giả được token. Phải chạy TRƯỚC mọi việc khác.
+    enforce_jwt_secret(settings.jwt_secret, settings.app_env)
+
     # Database tạo từ trước có thể thiếu cột/bảng mà code hiện tại cần (init_db.sql chỉ chạy khi
     # volume còn trống) -> mọi truy vấn users nổ UndefinedColumnError, đăng ký/đăng nhập trả 500.
     if settings.auto_migrate_schema:
@@ -170,6 +174,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(conversations.router, prefix="/api/conversations", tags=["conversations"])
 app.include_router(quiz.router, prefix="/api/quiz", tags=["quiz"])
 
 @app.get("/health")

@@ -1,10 +1,15 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
@@ -93,3 +98,39 @@ class QuizAttempt(Base):
 
     user = relationship("User", back_populates="quiz_attempts")
     document = relationship("Document", back_populates="quiz_attempts")
+
+
+class Conversation(Base):
+    """Một cuộc trò chuyện hỏi đáp. Chỉ hiện trong danh sách khi đã có ít nhất một tin nhắn."""
+
+    __tablename__ = "conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    title = Column(String(200), nullable=False, default="")
+    # Phạm vi tài liệu lúc tạo (NULL = tất cả). Xóa tài liệu => về NULL, cuộc trò chuyện vẫn còn.
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now(), onupdate=_utcnow)
+
+    messages = relationship("ChatMessage", back_populates="conversation",
+                            cascade="all, delete-orphan", passive_deletes=True,
+                            order_by="ChatMessage.created_at")
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    role = Column(String(16), nullable=False)          # "user" | "assistant"
+    content = Column(Text, nullable=False)
+    citations_json = Column(Text, nullable=True)       # JSON text (cùng kiểu với UserRLState.reward_history_json)
+    intent = Column(String(32), nullable=True)
+    cached = Column(Boolean, nullable=False, default=False)
+    # created_at được gán ở phía ứng dụng (độ chính xác micro-giây) để thứ tự tin nhắn luôn ổn định.
+    created_at = Column(DateTime(timezone=True), default=_utcnow, server_default=func.now())
+
+    conversation = relationship("Conversation", back_populates="messages")

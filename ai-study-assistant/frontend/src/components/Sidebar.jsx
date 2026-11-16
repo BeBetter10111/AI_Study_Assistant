@@ -2,12 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import Icon from "./Icons";
 import { displayName, initials } from "../utils/user";
 
-const NAV = [
-  { key: "chat", label: "Hỏi đáp", icon: "chat" },
-  { key: "quiz", label: "Quiz", icon: "quiz" },
-  { key: "flashcard", label: "Thẻ ghi nhớ", icon: "cards" },
-];
-
 const STATUS_TEXT = {
   uploading: "Đang tải lên…",
   pending: "Đang xử lý…",
@@ -17,9 +11,15 @@ const STATUS_TEXT = {
 export default function Sidebar({
   view,
   onNavigate,
+  conversations,
+  conversationId,
+  onNewChat,
+  onSelectConversation,
+  onDeleteConversation,
   uploads,
   documentId,
   onSelectDocument,
+  onDeleteDocument,
   onFiles,
   profile,
   fallbackName,
@@ -63,19 +63,71 @@ export default function Sidebar({
       </div>
 
       <nav className="nav" aria-label="Chức năng">
-        {NAV.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className="nav-item"
-            aria-current={view === item.key ? "page" : undefined}
-            onClick={() => go(item.key)}
-          >
-            <Icon name={item.icon} />
-            {item.label}
-          </button>
-        ))}
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={view === "chat" && !conversationId ? "page" : undefined}
+          onClick={() => {
+            setMenuOpen(false);
+            onNewChat();
+          }}
+        >
+          <Icon name="plus" />
+          Trò chuyện mới
+        </button>
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={view === "quiz" ? "page" : undefined}
+          onClick={() => go("quiz")}
+        >
+          <Icon name="quiz" />
+          Quiz
+        </button>
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={view === "flashcard" ? "page" : undefined}
+          onClick={() => go("flashcard")}
+        >
+          <Icon name="cards" />
+          Thẻ ghi nhớ
+        </button>
       </nav>
+
+      <div className="sb-section">
+        <span>Gần đây</span>
+      </div>
+      <div className={`doc-list${conversations.length === 0 ? " doc-list--empty" : ""}`}>
+        {conversations.length === 0 ? (
+          <p className="sb-hint">Các cuộc trò chuyện của bạn sẽ hiện ở đây.</p>
+        ) : (
+          conversations.map((c) => (
+            <div key={c.id} className="row">
+              <button
+                type="button"
+                className="doc"
+                aria-pressed={view === "chat" && conversationId === c.id}
+                title={c.title}
+                onClick={() => onSelectConversation(c.id)}
+              >
+                <span className="doc-body">
+                  <span className="doc-name">{c.title}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="row-del"
+                aria-label={`Xóa cuộc trò chuyện: ${c.title}`}
+                title="Xóa"
+                onClick={() => onDeleteConversation(c)}
+              >
+                <Icon name="trash" size={15} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
 
       <div className="sb-section">
         <span>Tài liệu</span>
@@ -112,25 +164,37 @@ export default function Sidebar({
               const ready = u.status === "embedded";
               const busy = u.status === "uploading" || u.status === "pending";
               return (
-                <button
-                  key={u.key}
-                  type="button"
-                  className="doc"
-                  aria-pressed={ready && documentId === u.id}
-                  disabled={!ready}
-                  title={u.name}
-                  onClick={() => onSelectDocument(u.id)}
-                >
-                  {busy ? <span className="spinner" style={{ marginTop: 4 }} /> : <Icon name="file" size={16} />}
-                  <span className="doc-body">
-                    <span className="doc-name">{u.name}</span>
-                    {!ready && (
-                      <span className={`doc-meta${u.status === "failed" ? " doc-meta--err" : ""}`}>
-                        {u.status === "failed" && u.error ? u.error : STATUS_TEXT[u.status] || u.status}
-                      </span>
-                    )}
-                  </span>
-                </button>
+                <div key={u.key} className="row">
+                  <button
+                    type="button"
+                    className="doc"
+                    aria-pressed={ready && documentId === u.id}
+                    disabled={!ready}
+                    title={u.name}
+                    onClick={() => onSelectDocument(u.id)}
+                  >
+                    {busy ? <span className="spinner" style={{ marginTop: 4 }} /> : <Icon name="file" size={16} />}
+                    <span className="doc-body">
+                      <span className="doc-name">{u.name}</span>
+                      {!ready && (
+                        <span className={`doc-meta${u.status === "failed" ? " doc-meta--err" : ""}`}>
+                          {u.status === "failed" && u.error ? u.error : STATUS_TEXT[u.status] || u.status}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                  {u.status !== "uploading" && (
+                    <button
+                      type="button"
+                      className="row-del"
+                      aria-label={`Xóa tài liệu: ${u.name}`}
+                      title="Xóa"
+                      onClick={() => onDeleteDocument(u)}
+                    >
+                      <Icon name="trash" size={15} />
+                    </button>
+                  )}
+                </div>
               );
             })}
           </>
@@ -159,7 +223,10 @@ export default function Sidebar({
             <button type="button" role="menuitem" className="menu-item" onClick={() => go("settings")}>
               <Icon name="sliders" /> Cài đặt
             </button>
-            <button type="button" role="menuitem" className="menu-item"
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
               onClick={() => {
                 setMenuOpen(false);
                 onLogout();

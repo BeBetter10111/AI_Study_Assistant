@@ -239,3 +239,25 @@ async def test_invalidate_owner_sync_bumps_the_same_generation_key(server, monke
     check = fakeredis.FakeAsyncRedis(server=server)
     assert int(await check.get(sc.generation_key("alice"))) == 2
     sc.invalidate_owner_sync("")            # owner rỗng: không làm gì, không lỗi
+
+
+async def test_invalidate_owner_does_nothing_when_disabled_or_redis_is_down(cache, monkeypatch):
+    calls = {"n": 0}
+
+    class Spy:
+        async def incr(self, *_a, **_k):
+            calls["n"] += 1
+
+    cache._client, cache._client_loop = Spy(), __import__("asyncio").get_running_loop()
+    monkeypatch.setattr(settings, "semantic_cache_enabled", False)
+    await cache.invalidate_owner("alice")
+    assert calls["n"] == 0                                   # tắt cache => không đụng Redis
+
+    monkeypatch.setattr(settings, "semantic_cache_enabled", True)
+    cache._down_until = __import__("time").monotonic() + 60   # breaker đang mở
+    await cache.invalidate_owner("alice")
+    assert calls["n"] == 0
+
+    cache._down_until = 0.0
+    await cache.invalidate_owner("alice")
+    assert calls["n"] == 1                                   # bình thường thì có gọi

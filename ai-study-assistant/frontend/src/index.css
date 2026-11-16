@@ -1224,6 +1224,76 @@ p {
   border-top: 0;
 }
 
+
+/* Hàng trong danh sách (hội thoại / tài liệu) có nút xóa hiện khi rê chuột hoặc focus bàn phím */
+.row {
+  position: relative;
+}
+
+.row .doc {
+  padding-right: 36px;
+}
+
+.row-del {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(-50%);
+}
+
+.row:hover .row-del,
+.row:focus-within .row-del,
+.row-del:focus-visible {
+  opacity: 1;
+}
+
+.row-del:hover {
+  background: var(--active);
+  color: var(--danger);
+}
+
+@media (hover: none) {
+  .row-del {
+    opacity: 0.7;
+  }
+}
+
+.doc-list--empty {
+  flex: none;
+}
+
+.sb-hint {
+  margin: 2px 10px 6px;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  z-index: 60;
+  max-width: min(440px, 90vw);
+  padding: 10px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: 10px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  transform: translateX(-50%);
+}
+
 @media (max-width: 860px) {
   .sidebar {
     position: fixed;

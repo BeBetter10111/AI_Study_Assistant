@@ -243,7 +243,12 @@ class SemanticCache:
         return f"{PREFIX}:e:{entry_id}"
 
     async def invalidate_owner(self, owner_id: str) -> None:
-        """Vô hiệu toàn bộ cache của một user (tăng generation; mục cũ tự hết hạn theo TTL)."""
+        """Vô hiệu toàn bộ cache của một user (tăng generation; mục cũ tự hết hạn theo TTL).
+
+        Cache tắt hoặc Redis đang lỗi (breaker) => không làm gì, để xóa tài liệu không phải chờ Redis.
+        """
+        if not self._available():
+            return
         try:
             await self._redis().incr(generation_key(owner_id))
         except Exception as exc:  # noqa: BLE001

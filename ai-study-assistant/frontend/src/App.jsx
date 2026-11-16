@@ -6,6 +6,11 @@ import {
   setUnauthorizedHandler,
   uploadDocument,
   getDocumentStatus,
+  listDocuments,
+  deleteDocument,
+  listConversations,
+  getConversation,
+  deleteConversation,
 } from "./services/api";
 import ChatWindow from "./features/chatbot/ChatWindow";
 import QuizPlayer from "./features/quiz/QuizPlayer";
@@ -31,6 +36,20 @@ const readView = () => {
   const name = window.location.hash.replace(/^#\/?/, "");
   return VIEWS.includes(name) ? name : "chat";
 };
+
+// Danh sách từ server là nguồn chính; giữ lại các mục chỉ có ở máy (đang tải lên / lỗi tải lên).
+const mergeServerDocs = (prev, docs) => {
+  const known = new Set(docs.map((d) => d.id));
+  const local = prev.filter((u) => !u.id || !known.has(u.id));
+  const server = docs.map((d) => ({ key: d.id, id: d.id, name: d.filename, status: d.status, error: null }));
+  return [...local, ...server];
+};
+
+// Tin nhắn lưu ở server -> dạng ChatWindow đang dùng.
+const toUiMessage = (m) =>
+  m.role === "assistant"
+    ? { role: "assistant", content: m.content, citations: m.citations || [], intent: m.intent, cached: m.cached }
+    : { role: "user", content: m.content };
 
 const AUTH_SCREEN = {
   LOGIN: "login",
@@ -64,6 +83,12 @@ export default function App() {
   const [view, setView] = useState(readView);
   const [navOpen, setNavOpen] = useState(false);
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null); // {type: "document" | "conversation", id, name}
+  const [notice, setNotice] = useState(null);
+  const [conversations, setConversations] = useState([]);
+  const [conversationId, setConversationId] = useState(null); // null = cuộc trò chuyện mới
+  const [initialMessages, setInitialMessages] = useState([]);
+  const [chatKey, setChatKey] = useState(0); // đổi => ChatWindow khởi tạo lại với hội thoại khác
   const [profile, setProfile] = useState(null);
   const [documentId, setDocumentId] = useState(null);
   const [uploads, setUploads] = useState([]); 
@@ -88,6 +113,10 @@ export default function App() {
     setProfile(null);
     setDocumentId(null);
     setUploads([]);
+    setConversations([]);
+    setConversationId(null);
+    setInitialMessages([]);
+    setChatKey((k) => k + 1);
     setResetToken(null);
     setLoginNotice("Your session has expired. Please log in again.");
     setAuthScreen(AUTH_SCREEN.LOGIN);
@@ -152,8 +181,13 @@ export default function App() {
     setProfile(null);
     setDocumentId(null);
     setUploads([]);
+    setConversations([]);
+    setConversationId(null);
+    setInitialMessages([]);
+    setChatKey((k) => k + 1);
     setNavOpen(false);
     setConfirmingLogout(false);
+    setPendingDelete(null);
     goLogin();
   };
 
@@ -174,8 +208,8 @@ export default function App() {
       name: file.name,
     }));
     setUploads((prev) => [
-      ...prev,
       ...items.map(({ key, name }) => ({ key, name, id: null, status: "uploading", error: null })),
+      ...prev,
     ]);
 
     let next = 0;
@@ -196,6 +230,91 @@ export default function App() {
     await Promise.all(
       Array.from({ length: Math.min(UPLOAD_CONCURRENCY, items.length) }, worker)
     );
+  };
+
+  const refreshConversations = useCallback(async () => {
+    try {
+      const res = await listConversations();
+      setConversations(res.data);
+    } catch {
+      /* danh sách chỉ là tiện ích; lần thao tác sau sẽ thử lại */
+    }
+  }, []);
+
+  // Sau khi đăng nhập (hoặc tải lại trang): khôi phục tài liệu và hội thoại đã lưu ở server.
+  useEffect(() => {
+    if (!userEmail) return undefined;
+    let cancelled = false;
+    listDocuments()
+      .then((res) => {
+        if (!cancelled) setUploads((prev) => mergeServerDocs(prev, res.data));
+      })
+      .catch(() => {
+        /* giữ nguyên danh sách hiện có */
+      });
+    refreshConversations();
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail, refreshConversations]);
+
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timer = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  const startNewChat = () => {
+    setConversationId(null);
+    setInitialMessages([]);
+    setChatKey((k) => k + 1);
+    navigate("chat");
+  };
+
+  const selectConversation = async (id) => {
+    navigate("chat");
+    if (id === conversationId) return;
+    try {
+      const res = await getConversation(id);
+      setInitialMessages(res.data.messages.map(toUiMessage));
+      setConversationId(id);
+      setDocumentId(res.data.document_id || null);
+      setChatKey((k) => k + 1);
+    } catch (err) {
+      setNotice(getErrorMessage(err, "Không mở được cuộc trò chuyện này."));
+      refreshConversations();
+    }
+  };
+
+  const requestDeleteDocument = (u) => {
+    if (!u.id) {
+      // Mục chưa lên server (tải lên lỗi): chỉ cần gỡ khỏi danh sách.
+      setUploads((prev) => prev.filter((x) => x.key !== u.key));
+      return;
+    }
+    setPendingDelete({ type: "document", id: u.id, name: u.name });
+  };
+
+  const requestDeleteConversation = (c) =>
+    setPendingDelete({ type: "conversation", id: c.id, name: c.title });
+
+  const confirmDelete = async () => {
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (!target) return;
+    try {
+      if (target.type === "document") {
+        await deleteDocument(target.id);
+        setUploads((prev) => prev.filter((u) => u.id !== target.id));
+        if (documentId === target.id) setDocumentId(null);
+      } else {
+        await deleteConversation(target.id);
+        setConversations((prev) => prev.filter((c) => c.id !== target.id));
+        if (conversationId === target.id) startNewChat();
+      }
+    } catch (err) {
+      setNotice(getErrorMessage(err, "Không xóa được. Vui lòng thử lại."));
+    }
   };
 
   useEffect(() => {
@@ -295,12 +414,24 @@ export default function App() {
       <Sidebar
         view={view}
         onNavigate={navigate}
+        conversations={conversations}
+        conversationId={conversationId}
+        onNewChat={() => {
+          startNewChat();
+          setNavOpen(false);
+        }}
+        onSelectConversation={(id) => {
+          selectConversation(id);
+          setNavOpen(false);
+        }}
+        onDeleteConversation={requestDeleteConversation}
         uploads={uploads}
         documentId={documentId}
         onSelectDocument={(id) => {
           setDocumentId(id);
           setNavOpen(false);
         }}
+        onDeleteDocument={requestDeleteDocument}
         onFiles={handleFilesChange}
         profile={profile}
         fallbackName={userEmail}
@@ -324,7 +455,16 @@ export default function App() {
 
         {/* Hỏi đáp / Quiz / Thẻ ghi nhớ luôn được giữ trong bộ nhớ để chuyển trang không mất nội dung. */}
         <main className="view view--chat" hidden={view !== "chat"}>
-          <ChatWindow documentId={documentId} scopeLabel={scopeLabel} hasDocuments={uploads.length > 0} />
+          <ChatWindow
+            key={chatKey}
+            documentId={documentId}
+            scopeLabel={scopeLabel}
+            hasDocuments={uploads.length > 0}
+            conversationId={conversationId}
+            initialMessages={initialMessages}
+            onConversationCreated={setConversationId}
+            onActivity={refreshConversations}
+          />
         </main>
         <main className="view" hidden={view !== "quiz"}>
           <QuizPlayer documentId={documentId} scopeLabel={scopeLabel} />
@@ -351,12 +491,33 @@ export default function App() {
       {confirmingLogout && (
         <ConfirmDialog
           title="Đăng xuất?"
-          message="Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng. Các tài liệu đã tải lên trong phiên này sẽ không còn hiển thị ở thanh bên."
+          message="Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng. Tài liệu và các cuộc trò chuyện của bạn vẫn được lưu."
           confirmLabel="Đăng xuất"
           danger
           onConfirm={handleLogout}
           onCancel={() => setConfirmingLogout(false)}
         />
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={pendingDelete.type === "document" ? "Xóa tài liệu?" : "Xóa cuộc trò chuyện?"}
+          message={
+            pendingDelete.type === "document"
+              ? `“${pendingDelete.name}” sẽ bị xóa cùng toàn bộ dữ liệu đã xử lý. Không thể hoàn tác. Lịch sử trò chuyện và quiz vẫn được giữ.`
+              : `Toàn bộ tin nhắn trong “${pendingDelete.name}” sẽ bị xóa. Không thể hoàn tác.`
+          }
+          confirmLabel="Xóa"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {notice && (
+        <div className="toast" role="alert">
+          {notice}
+        </div>
       )}
     </div>
   );

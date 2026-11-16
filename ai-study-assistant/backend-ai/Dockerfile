@@ -57,13 +57,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr tesseract-ocr-vie tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Chạy bằng user thường, KHÔNG phải root ----------------------------------
+# Nếu ứng dụng bị khai thác (file upload độc hại, lỗ hổng thư viện...), kẻ tấn công chỉ có quyền của
+# user `app` thay vì root trong container. Model ONNX và cache HuggingFace là nơi duy nhất cần ghi; chúng nằm
+# NGOÀI /app (docker-compose gắn named volume vào đó). Không đặt dưới /app vì /app bị bind-mount trong dev:
+# volume lồng trong bind mount có thể thuộc root và user `app` sẽ không ghi được.
+ARG APP_UID=10001
+RUN groupadd --gid ${APP_UID} app \
+    && useradd --uid ${APP_UID} --gid app --create-home --home-dir /home/app --shell /usr/sbin/nologin app \
+    && mkdir -p /app /home/app/models /home/app/.cache/huggingface \
+    && chown -R app:app /app /home/app
+
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/bin:$PATH" \
+    HOME=/home/app \
+    HF_HOME=/home/app/.cache/huggingface \
+    RAG_ONNX_DIR=/home/app/models/onnx
 
-COPY . .
+COPY --chown=app:app . .
+
+USER app
 
 EXPOSE 8000
 

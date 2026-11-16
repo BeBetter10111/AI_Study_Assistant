@@ -87,6 +87,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./backend-ai:/app
+      # Backend chạy bằng user thường (uid 10001): các thư mục cần GHI (model ONNX, cache HuggingFace) là named
+      # volume nằm ngoài /app, luôn ghi được và còn nguyên sau khi tạo lại container. Dùng chung cho API + worker.
+      - onnx_models:/home/app/models
+      - hf_cache:/home/app/.cache/huggingface
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else sys.exit(1)"]
       interval: 10s
@@ -107,6 +111,8 @@ services:
         condition: service_healthy
     volumes:
       - ./backend-ai:/app
+      - onnx_models:/home/app/models
+      - hf_cache:/home/app/.cache/huggingface
 
   frontend:
     build: ./frontend
@@ -132,3 +138,5 @@ volumes:
   qdrant_data:
   frontend_node_modules:
   minio_data:
+  onnx_models:
+  hf_cache:

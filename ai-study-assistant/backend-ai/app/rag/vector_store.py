@@ -338,6 +338,25 @@ class VectorStoreManager:
             raise
 
     # Hybrid search (dense + BM25 sparse) -> RRF -> re-rank
+    def delete_document(self, document_id: str, owner_id: Optional[str] = None) -> None:
+        """Xóa MỌI điểm (chunk dense + BM25 + chunk tóm tắt) của một tài liệu khỏi Qdrant.
+
+        Lọc theo cả ``owner_id`` (nếu có) để một id tài liệu của người khác không bao giờ bị xóa nhầm.
+        Ném lỗi nếu Qdrant lỗi — caller phải dừng việc xóa tài liệu để không bỏ lại vector mồ côi.
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        self._ensure_collection()
+        must = [qdrant_models.FieldCondition(
+            key="document_id", match=qdrant_models.MatchValue(value=str(document_id)))]
+        if owner_id:
+            must.append(qdrant_models.FieldCondition(
+                key="owner_id", match=qdrant_models.MatchValue(value=str(owner_id))))
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=qdrant_models.FilterSelector(filter=qdrant_models.Filter(must=must)),
+        )
+
     def search_similar_chunks(
         self,
         query: str,

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from app.api.dependencies import get_current_user
 from app.api.security.rate_limiter import limiter
 from app.config import settings
+from app.core import conversation_store
 from app.core.llm_engine import llm_engine
 from app.core.streaming import HEARTBEAT, SSE_KEEPALIVE, Done, aiter_blocking, run_with_heartbeat
 from app.models.models import User
@@ -84,6 +85,8 @@ class QueryRequest(BaseModel):
     document_id: Optional[str] = None
     top_k: int = Field(default=3, ge=1, le=20)
     history: List[HistoryMessage] = Field(default_factory=list, max_length=20)
+    # Khi có: lịch sử lấy từ DB (đáng tin hơn `history` do client gửi) và tin nhắn được lưu lại.
+    conversation_id: Optional[str] = None
 
 
 class Citation(BaseModel):
@@ -409,6 +412,14 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
     owner_id = str(current_user.id)
     heartbeat_s = settings.sse_heartbeat_s if settings.sse_heartbeat_s > 0 else None
 
+    # Kiểm tra hội thoại TRƯỚC khi bắt đầu stream để trả 404 đúng nghĩa (404 cả khi không phải của bạn).
+    conversation_id: Optional[str] = None
+    if payload.conversation_id:
+        conversation = await conversation_store.get_owned(payload.conversation_id, owner_id)
+        if conversation is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+        conversation_id = str(conversation["id"])
+
     async def events():
         start_time = time.perf_counter()
         step_started = time.perf_counter()
@@ -434,14 +445,32 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
             )
             return _sse({"type": "result", "data": response.model_dump()})
 
+        async def finish(intent: str, answer: str, citations: List[Citation], standalone_query: str,
+                         cached: bool = False) -> str:
+            """Lưu câu trả lời vào lịch sử (nếu có hội thoại) rồi tạo frame `result`."""
+            if conversation_id:
+                await conversation_store.append_message(
+                    conversation_id, owner_id, "assistant", answer,
+                    citations=[c.model_dump() for c in citations], intent=intent, cached=cached,
+                )
+            return final(intent, answer, citations, standalone_query, cached=cached)
+
+        history: List[Any] = list(payload.history)
         try:
+            if conversation_id:
+                # Lịch sử LẤY TRƯỚC khi ghi câu hỏi hiện tại để nó không tự xuất hiện trong ngữ cảnh.
+                stored = await conversation_store.recent_history(conversation_id, owner_id)
+                history = [HistoryMessage(**m) for m in stored]
+                await conversation_store.append_message(
+                    conversation_id, owner_id, "user", question, title_from=question
+                )
             intent = _classify_intent(question)
             yield running("intent", "Understanding your question")
             yield done("intent", "Understanding your question", _INTENT_LABELS.get(intent, intent))
 
             # Fast paths: no retrieval, no LLM call.
             if intent == "quiz_generation":
-                yield final(
+                yield await finish(
                     intent,
                     "To create a quiz, please use the 'Create Quiz' feature "
                     "and select the topic you want to review.",
@@ -450,15 +479,15 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 return
 
             if intent == "identity":
-                yield final(intent, _identity_answer(question), [], question)
+                yield await finish(intent, _identity_answer(question), [], question)
                 return
 
             # 1. Rewrite follow-up question (only when there is history)
             standalone_query = question
-            if payload.history:
+            if history:
                 yield running("rewrite", "Rewriting your follow-up as a standalone question")
                 async for tick in run_with_heartbeat(
-                    _rewrite_query, question, payload.history, interval=heartbeat_s
+                    _rewrite_query, question, history, interval=heartbeat_s
                 ):
                     if tick is HEARTBEAT:
                         yield SSE_KEEPALIVE
@@ -482,7 +511,7 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                     f"Reused an earlier answer ({hit.similarity:.0%} similar)",
                     ms=round((time.perf_counter() - cache_started) * 1000),
                 )
-                yield final(
+                yield await finish(
                     intent, cached["answer"],
                     [Citation(**c) for c in cached.get("citations", [])],
                     standalone_query, cached=True,
@@ -505,7 +534,7 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                     hits = tick.value
             if not hits:
                 yield done("search", "Searching your document", "No matching passages found")
-                yield final(
+                yield await finish(
                     intent,
                     "No relevant content found in the uploaded document. "
                     "Please upload study materials before asking questions.",
@@ -555,7 +584,7 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                     "citations": [c.model_dump() for c in citations],
                     "standalone_query": standalone_query,
                 })
-            yield final(intent, answer, citations, standalone_query)
+            yield await finish(intent, answer, citations, standalone_query)
         except Exception as exc:
             logger.exception("Streaming query failed")
             yield _sse({"type": "error", "detail": f"Something went wrong while answering: {exc}"})

@@ -58,6 +58,26 @@ _CREATE_TABLES: list[tuple[str, str]] = [
             reward_history_json TEXT NOT NULL DEFAULT '[]',
             updated_at TIMESTAMPTZ DEFAULT now()
         )"""),
+    ("conversations", """
+        CREATE TABLE IF NOT EXISTS conversations (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title VARCHAR(200) NOT NULL DEFAULT '',
+            document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )"""),
+    ("chat_messages", """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            role VARCHAR(16) NOT NULL,
+            content TEXT NOT NULL,
+            citations_json TEXT,
+            intent VARCHAR(32),
+            cached BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )"""),
 ]
 
 _PASSWORD_RESET_DDL = """
@@ -100,6 +120,8 @@ _ADD_COLUMNS: list[tuple[str, str, str]] = [
 _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash)",
     "CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_id, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_messages_conv ON chat_messages(conversation_id, created_at)",
 ]
 
 

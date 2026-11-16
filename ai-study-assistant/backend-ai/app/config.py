@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     max_response_latency_ms: int = 800
     jwt_secret: str = "change-me"
+    # "production" (mặc định, an toàn): JWT_SECRET yếu/mặc định => backend KHÔNG khởi động.
+    # Đặt APP_ENV=development để chạy thử với secret yếu (chỉ in cảnh báo).
+    app_env: str = "production"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
 

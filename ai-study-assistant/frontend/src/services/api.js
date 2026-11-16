@@ -80,6 +80,22 @@ export const changePassword = (currentPassword, newPassword, confirmPassword) =>
     confirm_password: confirmPassword,
   });
 
+// Tài liệu và lịch sử hội thoại lưu ở server: danh sách khôi phục được sau khi tải lại trang.
+export const listDocuments = () => api.get("/documents");
+
+export const deleteDocument = (id) => api.delete(`/documents/${id}`);
+
+export const listConversations = () => api.get("/conversations");
+
+export const createConversation = (documentId = null) =>
+  api.post("/conversations", { document_id: documentId });
+
+export const getConversation = (id) => api.get(`/conversations/${id}`);
+
+export const renameConversation = (id, title) => api.patch(`/conversations/${id}`, { title });
+
+export const deleteConversation = (id) => api.delete(`/conversations/${id}`);
+
 export const uploadDocument = (file) => {
   const form = new FormData();
   form.append("file", file);
@@ -130,7 +146,7 @@ export const askQuestionStream = async (
   question,
   documentId,
   onEvent,
-  { topK = 4, history = [], signal } = {}
+  { topK = 4, history = [], signal, conversationId = null } = {}
 ) => {
   const response = await fetch(`${api.defaults.baseURL || ""}/chat/query/stream`, {
     method: "POST",
@@ -141,7 +157,14 @@ export const askQuestionStream = async (
         ? { Authorization: api.defaults.headers.common.Authorization }
         : {}),
     },
-    body: JSON.stringify({ question, document_id: documentId, top_k: topK, history }),
+    body: JSON.stringify({
+      question,
+      document_id: documentId,
+      top_k: topK,
+      history,
+      // Có conversation_id: server lưu tin nhắn và tự lấy lịch sử từ DB (bỏ qua `history` ở trên).
+      ...(conversationId ? { conversation_id: conversationId } : {}),
+    }),
   });
 
   if (response.status === 401) notifyUnauthorized();
@@ -150,7 +173,7 @@ export const askQuestionStream = async (
     try {
       detail = formatDetail((await response.json()).detail) || detail;
     } catch {
-
+      /* non-JSON error body */
     }
     throw new Error(detail);
   }
