@@ -1365,3 +1365,74 @@ p {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Multi-domain: mindmap panel + TTS button */
+.msg-action {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  margin: 6px 8px 0 0;
+  padding: 3px 10px;
+}
+.msg-action:hover,
+.msg-action[aria-pressed="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+.mindmap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 0 auto 10px;
+  max-width: 760px;
+  padding: 10px 12px;
+}
+.mindmap-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.mindmap-stats {
+  color: var(--faint);
+  font-size: 12.5px;
+}
+.mindmap-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  margin-left: auto;
+}
+.mindmap-svg {
+  display: block;
+  max-height: 46vh;
+  width: 100%;
+}
+.mindmap-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+}
+.mindmap-rel {
+  fill: var(--faint);
+  font-size: 8.5px;
+  text-anchor: middle;
+}
+.mindmap-node {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+.mindmap-node.is-sel {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+.mindmap-label {
+  fill: var(--text);
+  font-size: 10px;
+}

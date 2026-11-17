@@ -1,0 +1,176 @@
+{
+ "_comment": "Seed lexicon for law, tax and economics term linking (VN<->EN, abbreviations). Same format as medical.json; extend with MEDICAL_LEXICON_PATHS.",
+ "entries": [
+  {
+   "canonical": "bộ luật dân sự",
+   "synonyms": [
+    "civil code",
+    "BLDS"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "bộ luật hình sự",
+   "synonyms": [
+    "penal code",
+    "criminal code",
+    "BLHS"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "bộ luật lao động",
+   "synonyms": [
+    "labor code",
+    "labour code",
+    "BLLĐ"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "hợp đồng lao động",
+   "synonyms": [
+    "labor contract",
+    "employment contract"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "thừa kế",
+   "synonyms": [
+    "inheritance",
+    "succession"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "di chúc",
+   "synonyms": [
+    "testament",
+    "last will"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "bồi thường thiệt hại",
+   "synonyms": [
+    "compensation for damages",
+    "damages"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "trách nhiệm pháp lý",
+   "synonyms": [
+    "legal liability",
+    "legal responsibility"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "thời hiệu",
+   "synonyms": [
+    "statute of limitations",
+    "limitation period"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "tranh chấp",
+   "synonyms": [
+    "dispute",
+    "disputes"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "vi phạm hành chính",
+   "synonyms": [
+    "administrative violation",
+    "administrative offence"
+   ],
+   "type": "law"
+  },
+  {
+   "canonical": "thuế giá trị gia tăng",
+   "synonyms": [
+    "VAT",
+    "GTGT",
+    "value added tax"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "thuế thu nhập cá nhân",
+   "synonyms": [
+    "personal income tax",
+    "PIT",
+    "TNCN"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "thuế thu nhập doanh nghiệp",
+   "synonyms": [
+    "corporate income tax",
+    "CIT",
+    "TNDN"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "lạm phát",
+   "synonyms": [
+    "inflation"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "tổng sản phẩm quốc nội",
+   "synonyms": [
+    "GDP",
+    "gross domestic product"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "cung cầu",
+   "synonyms": [
+    "supply and demand",
+    "cung và cầu"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "lãi suất",
+   "synonyms": [
+    "interest rate"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "trái phiếu",
+   "synonyms": [
+    "bond",
+    "bonds"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "khấu hao",
+   "synonyms": [
+    "depreciation"
+   ],
+   "type": "economics"
+  },
+  {
+   "canonical": "báo cáo tài chính",
+   "synonyms": [
+    "financial statement",
+    "financial statements",
+    "financial report"
+   ],
+   "type": "economics"
+  }
+ ]
+}

@@ -18,6 +18,7 @@ Linkers
 from __future__ import annotations
 
 import csv
+import glob
 import json
 import logging
 import os
@@ -35,6 +36,10 @@ from app.rag.hybrid import fold_diacritics
 logger = logging.getLogger(__name__)
 
 DEFAULT_LEXICON = os.path.join(os.path.dirname(__file__), "lexicons", "medical.json")
+# Every bundled domain lexicon (medical first, then science, law/economics, ...).
+DEFAULT_LEXICONS = [DEFAULT_LEXICON] + sorted(
+    p for p in glob.glob(os.path.join(os.path.dirname(__file__), "lexicons", "*.json")) if p != DEFAULT_LEXICON
+)
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _MAX_NGRAM = 6
 
@@ -238,7 +243,7 @@ def get_lexicon_linker() -> LexiconLinker:
         with _lock:
             if _default_linker is None:
                 extra = [p.strip() for p in (settings.medical_lexicon_paths or "").split(",") if p.strip()]
-                _default_linker = LexiconLinker.from_paths([DEFAULT_LEXICON, *extra])
+                _default_linker = LexiconLinker.from_paths([*DEFAULT_LEXICONS, *extra])
     return _default_linker
 
 

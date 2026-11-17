@@ -1,0 +1,12 @@
+{"domain": "stem", "question": "Công thức tính nghiệm của phương trình bậc hai là gì?", "ground_truth": "Nghiệm x = (-b ± √(b² − 4ac)) / (2a) với Δ = b² − 4ac.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "stem", "question": "Phương trình phản ứng giữa HCl và NaOH là gì?", "ground_truth": "HCl + NaOH → NaCl + H2O, là phản ứng trung hòa.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "stem", "question": "Định luật Ohm phát biểu như thế nào?", "ground_truth": "Cường độ dòng điện tỉ lệ thuận với hiệu điện thế và tỉ lệ nghịch với điện trở: I = U/R.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "legal", "question": "Điều kiện loại trừ của khoản 2 Điều này là gì?", "ground_truth": "Trả lời phải nêu đủ trường hợp loại trừ ghi ở khoản liên quan của cùng Điều.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "legal", "question": "Thời hiệu khởi kiện được quy định như thế nào?", "ground_truth": "Nêu thời hạn và điều kiện áp dụng đúng theo Điều/Khoản trong tài liệu.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "legal", "question": "Ai là người thừa kế theo pháp luật?", "ground_truth": "Liệt kê các hàng thừa kế theo thứ tự như quy định trong tài liệu.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "economics", "question": "Lạm phát là gì và ảnh hưởng đến lãi suất ra sao?", "ground_truth": "Lạm phát là sự tăng mức giá chung; thường làm lãi suất danh nghĩa tăng.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "economics", "question": "Thuế giá trị gia tăng được tính như thế nào?", "ground_truth": "Thuế GTGT = giá tính thuế × thuế suất, theo tài liệu.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "medical", "question": "Liều dùng Panadol cho người lớn là bao nhiêu?", "ground_truth": "Tài liệu dùng tên hoạt chất paracetamol; trả lời nêu liều theo tài liệu.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "medical", "question": "Tác dụng phụ của Advil là gì?", "ground_truth": "Tài liệu dùng tên ibuprofen; nêu các tác dụng phụ theo tài liệu.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "life_science", "question": "Quang hợp diễn ra ở bào quan nào?", "ground_truth": "Quang hợp diễn ra ở lục lạp.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}
+{"domain": "life_science", "question": "ATP có vai trò gì trong tế bào?", "ground_truth": "ATP là phân tử mang năng lượng cho các hoạt động của tế bào.", "document_id": "THAY-BANG-UUID-TAI-LIEU"}

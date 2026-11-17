@@ -46,7 +46,7 @@ _ALLOWED_FUNCS = frozenset({
 
 _ALLOWED_NODES = (
     ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load,
-    ast.Constant, ast.Tuple, ast.List, ast.Keyword, ast.Attribute,
+    ast.Constant, ast.Tuple, ast.List, ast.keyword, ast.Attribute,
     ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
     ast.UAdd, ast.USub,

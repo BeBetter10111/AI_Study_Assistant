@@ -102,6 +102,9 @@ export const uploadDocument = (file) => {
   return api.post("/documents/upload", form);
 };
 
+export const getDocumentMindmap = (documentId) =>
+  api.get(`/documents/${documentId}/mindmap`);
+
 export const getDocumentStatus = (documentId) =>
   api.get(`/documents/${documentId}/status`);
 

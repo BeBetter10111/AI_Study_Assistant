@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Icon from "../../components/Icons";
+import MindmapPanel from "../mindmap/MindmapPanel";
 import { askQuestionStream, createConversation, getErrorMessage } from "../../services/api";
 
 // conversationId / initialMessages: saved conversation (null + [] = new conversation). App changes this component's `key`
@@ -23,6 +24,8 @@ export default function ChatWindow({
   const scrollRef = useRef(null);
   const wasLoading = useRef(false);
   const abortRef = useRef(null);
+  const [showMindmap, setShowMindmap] = useState(false);
+  const [speakingIndex, setSpeakingIndex] = useState(null);
 
   // The input grows with its content (up to ~6 lines).
   useEffect(() => {
@@ -38,7 +41,29 @@ export default function ChatWindow({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, steps, error]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+  }, []);
+
+  // Read text aloud with the browser's Web Speech API (pronunciation practice for language answers).
+  const speak = (text, index) => {
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
+    if (!synth || !text) return;
+    if (speakingIndex === index) {
+      synth.cancel();
+      setSpeakingIndex(null);
+      return;
+    }
+    synth.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    // Heuristic: Vietnamese diacritics -> vi-VN, otherwise English.
+    utter.lang = /[à-ỹđ]/i.test(text) ? "vi-VN" : "en-US";
+    utter.onend = () => setSpeakingIndex(null);
+    utter.onerror = () => setSpeakingIndex(null);
+    setSpeakingIndex(index);
+    synth.speak(utter);
+  };
 
   useEffect(() => {
     if (wasLoading.current && !isLoading) textareaRef.current?.focus();
@@ -128,8 +153,10 @@ export default function ChatWindow({
             }
           } else if (event.type === "result") {
             answered = true;
-            const { answer, citations, intent, cached } = event.data;
-            const finalMsg = { role: "assistant", content: answer, citations, intent, cached, steps: collected };
+            const { answer, citations, intent, cached, domain, tts_text: ttsText, tool_used: toolUsed } = event.data;
+            const finalMsg = {
+              role: "assistant", content: answer, citations, intent, cached, domain, ttsText, toolUsed, steps: collected,
+            };
             const wasStreaming = streamingStarted;
             setMessages((prev) => (wasStreaming ? [...prev.slice(0, -1), finalMsg] : [...prev, finalMsg]));
           } else if (event.type === "error") {
@@ -189,6 +216,12 @@ export default function ChatWindow({
               ) : (
                 <div key={index}>
                   <div className="msg-ai">{message.content}</div>
+                  {message.ttsText && typeof window !== "undefined" && window.speechSynthesis && (
+                    <button type="button" className="msg-action" onClick={() => speak(message.ttsText, index)}>
+                      {speakingIndex === index ? "Dừng đọc" : "Nghe phát âm"}
+                    </button>
+                  )}
+                  {message.toolUsed && <p className="msg-extra">Đã dùng công cụ: {message.toolUsed}</p>}
                   {message.partial && <p className="msg-extra">Câu trả lời chưa hoàn chỉnh (đã dừng hoặc bị gián đoạn).</p>}
                   {message.cached && (
                     <p className="msg-extra">Trả lời từ một câu hỏi tương tự đã hỏi trước đó.</p>
@@ -237,6 +270,9 @@ export default function ChatWindow({
       </div>
 
       <div className="composer-wrap">
+        {showMindmap && documentId && (
+          <MindmapPanel documentId={documentId} onClose={() => setShowMindmap(false)} />
+        )}
         <div className="composer">
           <textarea
             ref={textareaRef}
@@ -252,6 +288,11 @@ export default function ChatWindow({
             <span className="scope" title={scopeLabel}>
               {scopeLabel}
             </span>
+            {documentId && (
+              <button type="button" className="msg-action" onClick={() => setShowMindmap((v) => !v)} aria-pressed={showMindmap}>
+                Sơ đồ tư duy
+              </button>
+            )}
             {isLoading ? (
               <button type="button" className="send" onClick={handleStop} aria-label="Dừng trả lời" title="Dừng">
                 <Icon name="stop" size={17} />

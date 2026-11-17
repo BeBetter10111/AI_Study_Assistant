@@ -20,6 +20,7 @@ from app.core.llm_engine import llm_engine
 from app.core.streaming import HEARTBEAT, SSE_KEEPALIVE, Done, aiter_blocking, run_with_heartbeat
 from app.models.models import User
 from app.rag import knowledge_graph
+from app.rag.query_expansion import expand_query
 from app.rag.semantic_cache import semantic_cache
 from app.rag.vector_store import vector_store
 
@@ -159,6 +160,28 @@ def _enrich_with_kg_and_tools(
     if not extras:
         return system_prompt, user_prompt
     return system_prompt, user_prompt + "\n\n" + "\n\n".join(extras)
+
+
+def _retrieval_extras(standalone_query: str) -> List[str]:
+    """Entity-linking terms (brand -> active ingredient, lay -> clinical name) for retrieval only."""
+    try:
+        return expand_query(standalone_query).terms
+    except Exception:  # noqa: BLE001 - expansion must never break chat
+        return []
+
+
+def _search_hits(standalone_query: str, top_k: int, document_id: Optional[str], owner_id: str):
+    """Hybrid search + query expansion, then complete retrieved legal articles with sibling clauses."""
+    hits = vector_store.search_similar_chunks(
+        query=standalone_query,
+        limit=top_k,
+        document_id=document_id,
+        owner_id=owner_id,
+        expansion_terms=_retrieval_extras(standalone_query),
+    )
+    if hits:
+        hits = vector_store.expand_legal_articles(hits, owner_id=owner_id)
+    return hits
 
 
 # Conversational query rewriter
@@ -381,11 +404,7 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
     #    calling them directly in `async def` would block the event loop (all other requests, including login
     #    and /health, would stall while the query runs).
     hits = await run_in_threadpool(
-        vector_store.search_similar_chunks,
-        query=standalone_query,
-        limit=payload.top_k,
-        document_id=payload.document_id,
-        owner_id=owner_id,
+        _search_hits, standalone_query, payload.top_k, payload.document_id, owner_id,
     )
 
     if not hits:
@@ -647,11 +666,8 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
             yield running("search", "Searching your document")
             hits: List[Dict[str, Any]] = []
             async for tick in run_with_heartbeat(
-                vector_store.search_similar_chunks,
+                _search_hits, standalone_query, payload.top_k, payload.document_id, owner_id,
                 interval=heartbeat_s,
-                query=standalone_query, limit=payload.top_k,
-                document_id=payload.document_id,
-                owner_id=owner_id,
             ):
                 if tick is HEARTBEAT:
                     yield SSE_KEEPALIVE

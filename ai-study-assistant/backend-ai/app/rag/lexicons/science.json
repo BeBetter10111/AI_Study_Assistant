@@ -1,0 +1,213 @@
+{
+ "_comment": "Seed lexicon for STEM / life-science term linking (chemical formulas, VN<->EN names). Same format as medical.json; extend with MEDICAL_LEXICON_PATHS.",
+ "entries": [
+  {
+   "canonical": "natri clorua",
+   "synonyms": [
+    "NaCl",
+    "muối ăn",
+    "sodium chloride",
+    "table salt"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "natri bicacbonat",
+   "synonyms": [
+    "NaHCO3",
+    "baking soda",
+    "sodium bicarbonate",
+    "muối nở"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "axit clohidric",
+   "synonyms": [
+    "HCl",
+    "hydrochloric acid",
+    "muriatic acid"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "axit sunfuric",
+   "synonyms": [
+    "H2SO4",
+    "sulfuric acid",
+    "sulphuric acid"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "natri hiđroxit",
+   "synonyms": [
+    "NaOH",
+    "xút",
+    "sodium hydroxide",
+    "caustic soda"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "canxi cacbonat",
+   "synonyms": [
+    "CaCO3",
+    "đá vôi",
+    "calcium carbonate",
+    "limestone"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "cacbon đioxit",
+   "synonyms": [
+    "CO2",
+    "carbon dioxide",
+    "khí cacbonic"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "amoniac",
+   "synonyms": [
+    "NH3",
+    "ammonia"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "glucozơ",
+   "synonyms": [
+    "glucose",
+    "đường nho",
+    "C6H12O6"
+   ],
+   "type": "chemical"
+  },
+  {
+   "canonical": "ADN",
+   "synonyms": [
+    "DNA",
+    "deoxyribonucleic acid",
+    "axit deoxyribonucleic"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "ARN",
+   "synonyms": [
+    "RNA",
+    "ribonucleic acid",
+    "axit ribonucleic"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "ATP",
+   "synonyms": [
+    "adenosine triphosphate",
+    "adenosin triphotphat"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "quang hợp",
+   "synonyms": [
+    "photosynthesis"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "hô hấp tế bào",
+   "synonyms": [
+    "cellular respiration"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "ti thể",
+   "synonyms": [
+    "mitochondria",
+    "mitochondrion"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "lục lạp",
+   "synonyms": [
+    "chloroplast",
+    "chloroplasts"
+   ],
+   "type": "biology"
+  },
+  {
+   "canonical": "đạo hàm",
+   "synonyms": [
+    "derivative",
+    "differentiation"
+   ],
+   "type": "math"
+  },
+  {
+   "canonical": "tích phân",
+   "synonyms": [
+    "integral",
+    "integration"
+   ],
+   "type": "math"
+  },
+  {
+   "canonical": "ma trận nghịch đảo",
+   "synonyms": [
+    "inverse matrix",
+    "matrix inverse"
+   ],
+   "type": "math"
+  },
+  {
+   "canonical": "gia tốc",
+   "synonyms": [
+    "acceleration"
+   ],
+   "type": "physics"
+  },
+  {
+   "canonical": "động năng",
+   "synonyms": [
+    "kinetic energy"
+   ],
+   "type": "physics"
+  },
+  {
+   "canonical": "thế năng",
+   "synonyms": [
+    "potential energy"
+   ],
+   "type": "physics"
+  },
+  {
+   "canonical": "định luật Ohm",
+   "synonyms": [
+    "Ohm's law",
+    "Ohm law"
+   ],
+   "type": "physics"
+  },
+  {
+   "canonical": "phản ứng oxi hóa khử",
+   "synonyms": [
+    "redox reaction",
+    "oxidation-reduction reaction"
+   ],
+   "type": "chemistry"
+  },
+  {
+   "canonical": "cân bằng hóa học",
+   "synonyms": [
+    "chemical equilibrium"
+   ],
+   "type": "chemistry"
+  }
+ ]
+}
