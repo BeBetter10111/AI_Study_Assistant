@@ -81,8 +81,9 @@ async def _owned(db: AsyncSession, conversation_id: str, user: User) -> Conversa
 
 
 @router.get("", response_model=List[ConversationOut])
+@limiter.limit("120/minute")
 async def list_conversations(
-    db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+    request: Request, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
     """Mới nhất trước. Hội thoại chưa có tin nhắn nào (vừa tạo, chưa gửi) được ẩn đi."""
     has_messages = exists().where(ChatMessage.conversation_id == Conversation.id)
@@ -154,7 +155,9 @@ async def create_conversation(
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)
+@limiter.limit("120/minute")
 async def get_conversation(
+    request: Request,
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

@@ -60,6 +60,9 @@ def _create_access_token(user_id: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+REGISTER_CONFLICT_MESSAGE = "Username, email or phone number is already registered."
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
 async def register(request: Request, payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
@@ -74,11 +77,9 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     existing = result.scalar_one_or_none()
 
     if existing is not None:
-        if existing.username == payload.username:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
-        if existing.email == payload.email:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number is already registered.")
+        # One generic message for username / email / phone: telling them apart would let anyone probe
+        # which usernames, emails and phone numbers already have an account (user enumeration).
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=REGISTER_CONFLICT_MESSAGE)
 
     # Security: role is ALWAYS forced to the default unprivileged role at public
     # registration — never read from the client payload.  An Admin must use the
@@ -102,7 +103,7 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Username, email or phone number is already registered.",
+            detail=REGISTER_CONFLICT_MESSAGE,
         ) from exc
     await db.refresh(user)
 
@@ -183,7 +184,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 @router.get("/me", response_model=UserProfile)
-async def read_me(current_user: User = Depends(get_current_user)):
+@limiter.limit("120/minute")
+async def read_me(request: Request, current_user: User = Depends(get_current_user)):
     return current_user
 
 

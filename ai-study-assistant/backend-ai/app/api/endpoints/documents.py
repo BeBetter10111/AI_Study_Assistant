@@ -191,7 +191,9 @@ async def upload_document(
 
 
 @router.get("/{document_id}/status")
+@limiter.limit("120/minute")
 async def get_document_status(
+    request: Request,
     document_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -302,7 +304,9 @@ class DocumentOut(BaseModel):
 
 
 @router.get("", response_model=List[DocumentOut])
+@limiter.limit("120/minute")
 async def list_documents(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

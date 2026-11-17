@@ -126,6 +126,15 @@ def _install_heavy_stubs() -> None:
 _install_heavy_stubs()
 
 
+@pytest.fixture(autouse=True)
+def _limiter_off_by_default(monkeypatch):
+    """slowapi counters are process-wide, so tests that register many users would hit 10/minute and flake.
+    Tests that exercise rate limiting enable it explicitly."""
+    from app.api.security.rate_limiter import limiter
+
+    monkeypatch.setattr(limiter, "enabled", False)
+
+
 @pytest.fixture
 async def app_client():
     """AsyncClient gắn thẳng vào FastAPI app, dùng SQLite trong bộ nhớ thay

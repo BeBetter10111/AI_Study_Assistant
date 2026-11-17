@@ -5,13 +5,14 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.api.security.rate_limiter import limiter
 from app.core.concurrency import llm_slot, user_request
 from app.core.llm_engine import llm_engine
+from app.core.quiz_tokens import issue_quiz_id, verify_quiz_id
 from app.models.models import Document, QuizAttempt, User
 from app.rag.vector_store import vector_store
 from app.rl import agent as rl_agent
@@ -174,7 +175,7 @@ async def _generate_quiz(payload: GenerateQuizRequest, db: AsyncSession, current
         )
 
     return GenerateQuizResponse(
-        quiz_id=str(uuid.uuid4()),
+        quiz_id=issue_quiz_id(str(current_user.id), len(valid_questions)),
         topic=result.get("topic", payload.topic),
         questions=valid_questions,
         difficulty=difficulty,
@@ -182,7 +183,9 @@ async def _generate_quiz(payload: GenerateQuizRequest, db: AsyncSession, current
 
 
 @router.post("/{quiz_id}/submit", response_model=SubmitQuizResponse)
+@limiter.limit("60/minute")
 async def submit_quiz_result(
+    request: Request,
     quiz_id: str,
     payload: SubmitQuizRequest,
     db: AsyncSession = Depends(get_db),
@@ -197,6 +200,19 @@ async def submit_quiz_result(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="quiz_id hoặc document_id không hợp lệ.",
         ) from exc
+
+    # The quiz id must have been issued to THIS user by /generate, and no more results than the quiz has
+    # questions may be submitted for it (otherwise a client could fabricate results to steer its own difficulty).
+    allowed = verify_quiz_id(str(current_user.id), quiz_uuid)
+    if allowed is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="quiz_id không hợp lệ.")
+    submitted = (await db.execute(
+        select(func.count(QuizAttempt.id)).where(
+            QuizAttempt.user_id == current_user.id, QuizAttempt.quiz_id == quiz_uuid
+        )
+    )).scalar_one()
+    if submitted >= allowed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Quiz này đã nộp đủ kết quả.")
 
     # document_id must refer to this user's document. Previously, an unknown ID violated the Postgres foreign key
     # -> HTTP 500, and could associate an attempt with another user's document.

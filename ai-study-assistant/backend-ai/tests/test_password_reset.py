@@ -14,6 +14,14 @@ NEW_PW = "brandnewpass2"
 EMAIL = "reset@example.com"
 
 
+@pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch):
+    """The limiter counters are process-wide; these flows call forgot-password far more than 5x/minute."""
+    from app.api.security.rate_limiter import limiter
+
+    monkeypatch.setattr(limiter, "enabled", False)
+
+
 @pytest.fixture
 def sent(monkeypatch):
     box = []
@@ -31,12 +39,8 @@ async def _register(client, email=EMAIL, username="resetuser"):
 
 
 async def _protected_call(client, token):
-    """Gọi một endpoint cần đăng nhập (quiz submit); 401 nếu token bị từ chối."""
-    return await client.post(
-        f"/api/quiz/{uuid.uuid4()}/submit",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"is_correct": True, "response_time_s": 5, "hints_used": 0},
-    )
+    """Call an endpoint that needs a valid access token; 401 if the token is rejected."""
+    return await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
 
 
 async def _forgot(client, email=EMAIL):

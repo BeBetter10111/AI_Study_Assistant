@@ -80,7 +80,7 @@ def test_ollama_timeout_returns_friendly_message(monkeypatch):
         raise httpx.ReadTimeout("slow", request=request)
 
     _fake_post(monkeypatch, handler)
-    assert "quá chậm" in engine.generate_rag_response(prompt="q", system_prompt="s")
+    assert "too slowly" in engine.generate_rag_response(prompt="q", system_prompt="s")
 
 
 def test_ollama_missing_model_tells_user_to_pull(monkeypatch):
@@ -134,6 +134,15 @@ def test_ollama_structured_output_unreachable_raises_runtime_error(monkeypatch):
         engine.generate_structured_output(prompt="x", schema_class=_Schema)
 
 
+async def _headers(client, name="llmuser"):
+    res = await client.post(
+        "/api/auth/register",
+        json={"username": name, "email": f"{name}@example.com", "password": "hunter22"},
+    )
+    assert res.status_code == 201, res.text
+    return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+
 async def test_chat_query_success_path_runs_llm_in_threadpool(app_client, monkeypatch):
     from app.api.endpoints import chat
 
@@ -141,7 +150,9 @@ async def test_chat_query_success_path_runs_llm_in_threadpool(app_client, monkey
     monkeypatch.setattr(chat.vector_store, "search_similar_chunks", lambda **kw: [hit])
     monkeypatch.setattr(chat.llm_engine, "generate_rag_response", lambda prompt, system_prompt: "Trả lời mẫu")
 
-    response = await app_client.post("/api/chat/query", json={"question": "Khóa chính là gì?"})
+    response = await app_client.post(
+        "/api/chat/query", json={"question": "Khóa chính là gì?"}, headers=await _headers(app_client)
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["answer"] == "Trả lời mẫu"
@@ -162,7 +173,9 @@ async def test_quiz_generate_filters_questions_with_invalid_correct_index(app_cl
         lambda prompt, schema_class: {"topic": "T", "questions": [good, out_of_range]},
     )
 
-    response = await app_client.post("/api/quiz/generate", json={"topic": "T", "num_questions": 2})
+    response = await app_client.post(
+        "/api/quiz/generate", json={"topic": "T", "num_questions": 2}, headers=await _headers(app_client)
+    )
     assert response.status_code == 200
     assert [q["question"] for q in response.json()["questions"]] == ["Q1"]
 
@@ -177,7 +190,9 @@ async def test_quiz_generate_returns_502_when_llm_fails(app_client, monkeypatch)
         raise RuntimeError("ollama down")
 
     monkeypatch.setattr(quiz.llm_engine, "generate_structured_output", boom)
-    response = await app_client.post("/api/quiz/generate", json={"topic": "T", "num_questions": 2})
+    response = await app_client.post(
+        "/api/quiz/generate", json={"topic": "T", "num_questions": 2}, headers=await _headers(app_client)
+    )
     assert response.status_code == 502
 
 
@@ -219,6 +234,6 @@ def test_vllm_backend_without_cuda_degrades_gracefully(monkeypatch):
     monkeypatch.setattr(settings, "llm_backend", "vllm")
     engine = LLMEngineManager()
     assert engine.llm is None
-    assert "chưa sẵn sàng" in engine.generate_rag_response(prompt="q", system_prompt="s")
+    assert "not ready" in engine.generate_rag_response(prompt="q", system_prompt="s")
     with pytest.raises(RuntimeError):
         engine.generate_structured_output(prompt="p", schema_class=_Schema)
