@@ -3,9 +3,9 @@ import { changePassword, getErrorMessage } from "../../services/api";
 import { getThemePreference, setThemePreference } from "../../theme";
 
 const THEMES = [
-  { key: "light", label: "Sáng" },
-  { key: "dark", label: "Tối" },
-  { key: "system", label: "Theo hệ thống" },
+  { key: "light", label: "Light" },
+  { key: "dark", label: "Dark" },
+  { key: "system", label: "System" },
 ];
 
 const MAX_PASSWORD_BYTES = 72; // bcrypt limit, matching the backend.
@@ -39,19 +39,19 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
     setDone(false);
 
     if (!form.current || !form.next) {
-      setError("Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.");
+      setError("Please enter your current password and new password.");
       return;
     }
     if (form.next.length < 8) {
-      setError("Mật khẩu mới cần ít nhất 8 ký tự.");
+      setError("New password must be at least 8 characters.");
       return;
     }
     if (new TextEncoder().encode(form.next).length > MAX_PASSWORD_BYTES) {
-      setError("Mật khẩu mới quá dài (tối đa 72 byte).");
+      setError("New password is too long (maximum 72 bytes).");
       return;
     }
     if (form.next !== form.confirm) {
-      setError("Mật khẩu xác nhận không khớp.");
+      setError("Passwords do not match.");
       return;
     }
 
@@ -63,7 +63,7 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
       setDone(true);
       closeForm();
     } catch (err) {
-      setError(getErrorMessage(err, "Không thể đổi mật khẩu. Vui lòng thử lại."));
+      setError(getErrorMessage(err, "Could not change password. Please try again."));
     } finally {
       setSaving(false);
     }
@@ -72,27 +72,27 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
   return (
     <div className="page">
       <header className="page-head">
-        <h1 className="page-title">Cài đặt</h1>
-        <p className="page-sub">Quản lý tài khoản và giao diện.</p>
+        <h1 className="page-title">Settings</h1>
+        <p className="page-sub">Manage your account and appearance.</p>
       </header>
 
       <section className="card card-pad">
-        <h2 className="card-title">Tài khoản</h2>
-        <p className="card-sub">Thiết lập đăng nhập và bảo mật.</p>
+        <h2 className="card-title">Account</h2>
+        <p className="card-sub">Manage sign-in and security settings.</p>
 
         <div style={{ marginTop: 12 }}>
           <div className="setting-row">
             <div>
-              <div className="setting-name">Trạng thái tài khoản</div>
-              <div className="setting-desc">Tài khoản của bạn đang hoạt động.</div>
+              <div className="setting-name">Account status</div>
+              <div className="setting-desc">Your account is active.</div>
             </div>
-            <span className="badge badge--ok">Đang hoạt động</span>
+            <span className="badge badge--ok">Active</span>
           </div>
 
           <div className="setting-row">
             <div>
-              <div className="setting-name">Mật khẩu</div>
-              <div className="setting-desc">Đổi mật khẩu đăng nhập của bạn.</div>
+              <div className="setting-name">Password</div>
+              <div className="setting-desc">Change your sign-in password.</div>
             </div>
             {!pwOpen && (
               <button
@@ -103,14 +103,14 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
                   setPwOpen(true);
                 }}
               >
-                Đổi mật khẩu
+                Change password
               </button>
             )}
           </div>
 
           {done && !pwOpen && (
             <p className="note note--ok" role="status" style={{ marginBottom: 16 }}>
-              Đã đổi mật khẩu. Các thiết bị khác sẽ cần đăng nhập lại.
+              Password changed. Other devices will need to sign in again.
             </p>
           )}
 
@@ -118,7 +118,7 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
             <form className="pw-form" onSubmit={handleSubmit} noValidate>
               <div className="field">
                 <label className="label" htmlFor="pw-current">
-                  Mật khẩu hiện tại
+                  Current password
                 </label>
                 <input
                   id="pw-current"
@@ -133,7 +133,7 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
               <div className="form-grid">
                 <div className="field">
                   <label className="label" htmlFor="pw-new">
-                    Mật khẩu mới
+                    New password
                   </label>
                   <input
                     id="pw-new"
@@ -143,11 +143,11 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
                     onChange={setField("next")}
                     autoComplete="new-password"
                   />
-                  <span className="field-hint">Ít nhất 8 ký tự.</span>
+                  <span className="field-hint">At least 8 characters.</span>
                 </div>
                 <div className="field">
                   <label className="label" htmlFor="pw-confirm">
-                    Nhập lại mật khẩu mới
+                    Confirm new password
                   </label>
                   <input
                     id="pw-confirm"
@@ -166,10 +166,10 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
               )}
               <div className="actions">
                 <button type="submit" className="btn btn--primary" disabled={saving}>
-                  {saving ? "Đang lưu…" : "Cập nhật mật khẩu"}
+                  {saving ? "Saving…" : "Update password"}
                 </button>
                 <button type="button" className="btn" onClick={closeForm} disabled={saving}>
-                  Hủy
+                  Cancel
                 </button>
               </div>
             </form>
@@ -178,12 +178,12 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
           <div className="setting-row">
             <div>
               <div className="setting-name" style={{ color: "var(--danger)" }}>
-                Đăng xuất
+                Log out
               </div>
-              <div className="setting-desc">Đăng xuất khỏi tài khoản trên thiết bị này.</div>
+              <div className="setting-desc">Log out of your account on this device.</div>
             </div>
             <button type="button" className="btn btn--danger" onClick={onLogout}>
-              Đăng xuất
+              Log out
             </button>
           </div>
         </div>
@@ -192,10 +192,10 @@ export default function SettingsPage({ onPasswordChanged, onLogout }) {
       <section className="card card-pad">
         <div className="setting-row" style={{ padding: 0 }}>
           <div>
-            <h2 className="card-title">Giao diện</h2>
-            <p className="card-sub">Chọn màu nền cho ứng dụng.</p>
+            <h2 className="card-title">Appearance</h2>
+            <p className="card-sub">Choose the application theme.</p>
           </div>
-          <div className="segmented" role="group" aria-label="Giao diện">
+          <div className="segmented" role="group" aria-label="Appearance">
             {THEMES.map((t) => (
               <button key={t.key} type="button" aria-pressed={theme === t.key} onClick={() => chooseTheme(t.key)}>
                 {t.label}

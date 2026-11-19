@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Icon from "../../components/Icons";
 import MindmapPanel from "../mindmap/MindmapPanel";
+import ConfidenceBadge from "./ConfidenceBadge";
 import { askQuestionStream, createConversation, getErrorMessage } from "../../services/api";
 
 // conversationId / initialMessages: saved conversation (null + [] = new conversation). App changes this component's `key`
@@ -153,9 +154,14 @@ export default function ChatWindow({
             }
           } else if (event.type === "result") {
             answered = true;
-            const { answer, citations, intent, cached, domain, tts_text: ttsText, tool_used: toolUsed } = event.data;
+            const {
+              answer, citations, intent, cached, domain, tts_text: ttsText, tool_used: toolUsed,
+              confidence, confidence_label: confidenceLabel, unsupported_claims: unsupportedClaims,
+              invalid_citations: invalidCitations,
+            } = event.data;
             const finalMsg = {
               role: "assistant", content: answer, citations, intent, cached, domain, ttsText, toolUsed, steps: collected,
+              confidence, confidenceLabel, unsupportedClaims, invalidCitations,
             };
             const wasStreaming = streamingStarted;
             setMessages((prev) => (wasStreaming ? [...prev.slice(0, -1), finalMsg] : [...prev, finalMsg]));
@@ -216,6 +222,12 @@ export default function ChatWindow({
               ) : (
                 <div key={index}>
                   <div className="msg-ai">{message.content}</div>
+                  <ConfidenceBadge
+                    confidence={message.confidence}
+                    label={message.confidenceLabel}
+                    unsupportedClaims={message.unsupportedClaims}
+                    invalidCitations={message.invalidCitations}
+                  />
                   {message.ttsText && typeof window !== "undefined" && window.speechSynthesis && (
                     <button type="button" className="msg-action" onClick={() => speak(message.ttsText, index)}>
                       {speakingIndex === index ? "Dừng đọc" : "Nghe phát âm"}

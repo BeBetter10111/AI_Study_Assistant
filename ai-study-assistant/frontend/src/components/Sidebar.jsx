@@ -93,6 +93,33 @@ export default function Sidebar({
           <Icon name="cards" />
           Thẻ ghi nhớ
         </button>
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={view === "exam" ? "page" : undefined}
+          onClick={() => go("exam")}
+        >
+          <Icon name="exam" />
+          Ôn thi
+        </button>
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={view === "speaking" ? "page" : undefined}
+          onClick={() => go("speaking")}
+        >
+          <Icon name="mic" />
+          Luyện nói
+        </button>
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={view === "lecturer" ? "page" : undefined}
+          onClick={() => go("lecturer")}
+        >
+          <Icon name="teacher" />
+          Giảng viên
+        </button>
       </nav>
 
       <div className="sb-section">

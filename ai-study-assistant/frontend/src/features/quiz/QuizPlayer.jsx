@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { generateQuiz, getErrorMessage, submitQuizResult } from "../../services/api";
 
 const STATUS = {
@@ -15,8 +15,12 @@ const DIFFICULTY_LABEL = {
   hard: { text: "Khó", tone: "err" },
 };
 
-export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả tài liệu" }) {
+export default function QuizPlayer({ documentId = null, scopeLabel = "Tất cả tài liệu", prefillTopic = "" }) {
   const [topic, setTopic] = useState("");
+  // Exam-prep mode can send the user here with a weak topic to practise.
+  useEffect(() => {
+    if (prefillTopic) setTopic(prefillTopic);
+  }, [prefillTopic]);
   const [numQuestions, setNumQuestions] = useState(5);
   const [status, setStatus] = useState(STATUS.IDLE);
   const [errorMessage, setErrorMessage] = useState(null);

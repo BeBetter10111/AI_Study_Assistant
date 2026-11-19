@@ -20,6 +20,9 @@ import SignupPage from "./features/auth/SignupPage";
 import ForgotPasswordPage from "./features/auth/ForgotPasswordPage";
 import VerifyCodePage from "./features/auth/VerifyCodePage";
 import ResetPasswordPage from "./features/auth/ResetPasswordPage";
+import ExamView from "./features/exam/ExamView";
+import LecturerView from "./features/lecturer/LecturerView";
+import SpeakingView from "./features/speaking/SpeakingView";
 import ProfilePage from "./features/profile/ProfilePage";
 import SettingsPage from "./features/settings/SettingsPage";
 import Sidebar from "./components/Sidebar";
@@ -31,7 +34,7 @@ const ALLOWED_EXT = /\.(pdf|docx|pptx|md)$/i;
 const DONE_STATUSES = ["embedded", "failed"];
 
 // Screens available after login. Store the route in the URL hash (#/profile) so reloads stay on the same screen.
-const VIEWS = ["chat", "quiz", "flashcard", "profile", "settings"];
+const VIEWS = ["chat", "quiz", "flashcard", "exam", "speaking", "lecturer", "profile", "settings"];
 const readView = () => {
   const name = window.location.hash.replace(/^#\/?/, "");
   return VIEWS.includes(name) ? name : "chat";
@@ -92,6 +95,7 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [documentId, setDocumentId] = useState(null);
   const [uploads, setUploads] = useState([]); 
+  const [quizTopic, setQuizTopic] = useState(""); // weak topic sent from exam mode to the quiz screen
 
   useEffect(() => {
     const onHash = () => setView(readView());
@@ -467,10 +471,28 @@ export default function App() {
           />
         </main>
         <main className="view" hidden={view !== "quiz"}>
-          <QuizPlayer documentId={documentId} scopeLabel={scopeLabel} />
+          <QuizPlayer documentId={documentId} scopeLabel={scopeLabel} prefillTopic={quizTopic} />
         </main>
         <main className="view" hidden={view !== "flashcard"}>
           <FlashcardDeck documentId={documentId} scopeLabel={scopeLabel} />
+        </main>
+        <main className="view" hidden={view !== "exam"}>
+          <ExamView
+            documentId={documentId}
+            scopeLabel={scopeLabel}
+            onPracticeTopic={(topic) => {
+              setQuizTopic(topic);
+              navigate("quiz");
+            }}
+          />
+        </main>
+        {view === "speaking" && (
+          <main className="view">
+            <SpeakingView />
+          </main>
+        )}
+        <main className="view" hidden={view !== "lecturer"}>
+          <LecturerView documentId={documentId} scopeLabel={scopeLabel} />
         </main>
         {view === "profile" && (
           <main className="view">

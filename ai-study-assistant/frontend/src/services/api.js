@@ -201,3 +201,37 @@ export const askQuestionStream = async (
   buffer += decoder.decode();
   if (buffer.trim()) flush([buffer]); // The final frame has no trailing blank line.
 };
+
+// Exam-prep mode
+export const generateExam = (data) => api.post("/exams/generate", data, { timeout: 300000 });
+export const listExams = () => api.get("/exams");
+export const getExam = (id) => api.get(`/exams/${id}`);
+export const submitExam = (id, answers, durationS) =>
+  api.post(`/exams/${id}/submit`, { answers, duration_s: durationS });
+export const deleteExam = (id) => api.delete(`/exams/${id}`);
+export const getWeakTopics = () => api.get("/exams/report/weak-topics");
+
+// Lecturer mode
+export const generateBankItems = (data) => api.post("/lecturer/bank/generate", data, { timeout: 300000 });
+export const listBankItems = (params) => api.get("/lecturer/bank", { params });
+export const patchBankItem = (id, data) => api.patch(`/lecturer/bank/${id}`, data);
+export const deleteBankItem = (id) => api.delete(`/lecturer/bank/${id}`);
+export const gradeBankAnswer = (id, answer) => api.post(`/lecturer/bank/${id}/grade`, { answer }, { timeout: 180000 });
+export const composePaper = (data) => api.post("/lecturer/papers", data);
+export const listPapers = () => api.get("/lecturer/papers");
+export const deletePaper = (id) => api.delete(`/lecturer/papers/${id}`);
+export const downloadPaper = (id, format, includeAnswers) =>
+  api.get(`/lecturer/papers/${id}/export`, {
+    params: { format, include_answers: includeAnswers },
+    responseType: "blob",
+  });
+
+// Speaking practice (Whisper)
+export const getSpeechStatus = () => api.get("/speech/status");
+export const practiceSpeech = (blob, filename, language, referenceText) => {
+  const form = new FormData();
+  form.append("file", blob, filename);
+  form.append("language", language);
+  if (referenceText) form.append("reference_text", referenceText);
+  return api.post("/speech/practice", form, { timeout: 180000 });
+};

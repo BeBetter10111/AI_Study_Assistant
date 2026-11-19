@@ -2,13 +2,13 @@ import { useState } from "react";
 import { generateQuiz, getErrorMessage } from "../../services/api";
 
 const RECALL_LEVELS = [
-  { key: "again", label: "Chưa nhớ" },
-  { key: "hard", label: "Khó" },
-  { key: "good", label: "Tốt" },
-  { key: "easy", label: "Dễ" },
+  { key: "again", label: "Forgot" },
+  { key: "hard", label: "Hard" },
+  { key: "good", label: "Good" },
+  { key: "easy", label: "Easy" },
 ];
 
-export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất cả tài liệu" }) {
+export default function FlashcardDeck({ documentId = null, scopeLabel = "All documents" }) {
   const [topic, setTopic] = useState("");
   const [cards, setCards] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -31,7 +31,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
       }));
 
       if (generatedCards.length === 0) {
-        throw new Error("Không tạo được thẻ nào cho chủ đề này.");
+        throw new Error("No cards could be created for this topic.");
       }
 
       setCards(generatedCards);
@@ -40,7 +40,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
       setRecallCounts({});
     } catch (err) {
       const detail =
-        getErrorMessage(err, err.message || "Không thể tạo bộ thẻ ghi nhớ.");
+        getErrorMessage(err, err.message || "Could not create the flashcards.");
       setErrorMessage(detail);
     } finally {
       setIsLoading(false);
@@ -61,8 +61,8 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
     return (
       <div className="page">
         <header className="page-head">
-          <h1 className="page-title">Tạo bộ thẻ ghi nhớ</h1>
-          <p className="page-sub">Nhập chủ đề, hệ thống sẽ tạo 10 thẻ hỏi đáp từ tài liệu của bạn.</p>
+          <h1 className="page-title">Create flashcards</h1>
+          <p className="page-sub">Enter a topic and the system will create 10 question-and-answer cards from your documents.</p>
         </header>
 
         <form
@@ -75,18 +75,18 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
         >
           <div className="field">
             <label className="label" htmlFor="fc-topic">
-              Chủ đề
+              Topic
             </label>
             <input
               id="fc-topic"
               className="input"
-              placeholder="Ví dụ: Từ vựng mạng máy tính"
+              placeholder="Example: Computer network terminology"
               value={topic}
               onChange={(event) => setTopic(event.target.value)}
               disabled={isLoading}
             />
           </div>
-          <p className="field-hint">Phạm vi: {scopeLabel}</p>
+          <p className="field-hint">Scope: {scopeLabel}</p>
           {errorMessage && (
             <p className="note note--err" role="alert">
               {errorMessage}
@@ -94,7 +94,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
           )}
           <div className="actions">
             <button type="submit" className="btn btn--primary btn--lg" disabled={isLoading || !topic.trim()}>
-              {isLoading ? "Đang tạo…" : "Tạo thẻ ghi nhớ"}
+              {isLoading ? "Generating…" : "Create flashcards"}
             </button>
           </div>
         </form>
@@ -109,7 +109,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
     <div className="page">
       <div className="quiz-meta">
         <span>
-          Thẻ {Math.min(currentIndex + 1, cards.length)}/{cards.length}
+          Card {Math.min(currentIndex + 1, cards.length)}/{cards.length}
         </span>
         <button
           type="button"
@@ -121,7 +121,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
             setRecallCounts({});
           }}
         >
-          Bộ thẻ mới
+          New deck
         </button>
       </div>
       <div className="progress">
@@ -130,7 +130,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
 
       {isDeckFinished ? (
         <section className="card card-pad">
-          <h2 className="card-title">Bạn đã ôn hết bộ thẻ này</h2>
+          <h2 className="card-title">You finished this deck</h2>
           <ul className="summary">
             {RECALL_LEVELS.map((level) => (
               <li key={level.key}>
@@ -148,7 +148,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
               setRecallCounts({});
             }}
           >
-            Ôn lại từ đầu
+            Review from the beginning
           </button>
         </section>
       ) : (
@@ -160,7 +160,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
                 role="button"
                 tabIndex={isFlipped ? -1 : 0}
                 aria-hidden={isFlipped}
-                aria-label="Mặt trước: lật thẻ để xem đáp án"
+                aria-label="Front: flip card to see answer"
                 onClick={handleFlip}
                 onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), handleFlip())}
               >
@@ -171,7 +171,7 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
                 role="button"
                 tabIndex={isFlipped ? 0 : -1}
                 aria-hidden={!isFlipped}
-                aria-label="Mặt sau: lật thẻ để xem lại câu hỏi"
+                aria-label="Back: flip card to see question"
                 onClick={handleFlip}
                 onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), handleFlip())}
               >
@@ -179,7 +179,6 @@ export default function FlashcardDeck({ documentId = null, scopeLabel = "Tất c
               </div>
             </div>
           </div>
-          <p className="flip-hint">{isFlipped ? "Bấm vào thẻ để xem lại câu hỏi" : "Bấm vào thẻ để xem đáp án"}</p>
 
           {isFlipped && (
             <div className="rating">

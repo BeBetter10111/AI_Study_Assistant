@@ -1,18 +1,18 @@
 # AI Study Assistant
 
-Trợ lý học tập thông minh — RAG-based Q&A, tự động tạo quiz/flashcard, và
-cá nhân hóa lộ trình học bằng Reinforcement Learning.
+An intelligent study assistant featuring RAG-based Q&A, automatic quiz and flashcard
+generation, and personalized learning paths using Reinforcement Learning.
 
-## Kiến trúc
+## Architecture
 
-- **frontend/** — ReactJS (Tailwind CSS)
+- **frontend/** — React.js (Tailwind CSS)
 - **backend-ai/** — FastAPI + AI Engine (RAG, RL) + Celery worker
-- **postgres** — dữ liệu quan hệ (users, quiz, lịch sử làm bài)
-- **qdrant** — vector store cho RAG
-- **minio** — lưu trữ file tài liệu gốc
-- **redis + celery** — xử lý bất đồng bộ (ingest tài liệu, chấm điểm nền)
+- **postgres** — relational data (users, quizzes, and quiz history)
+- **qdrant** — vector store for RAG
+- **minio** — storage for original document files
+- **redis + celery** — asynchronous processing (document ingestion and background scoring)
 
-## Chạy dự án
+## Run the Project
 
 ```bash
 cp .env .env.local   # Edit with your actual values.
@@ -24,17 +24,17 @@ docker compose up --build
 - Qdrant dashboard: http://localhost:6333/dashboard
 - MinIO console: http://localhost:9001
 
-## Ràng buộc chính
+## Main Constraints
 
-- Thời gian phản hồi mỗi truy vấn ≤ 800ms
-- Không dùng web search tự do (chống hallucination — Grounded RAG only)
-- Suy luận LLM phân tán trên 4 lõi GPU NVIDIA A16 độc lập, không tràn VRAM
-- Toàn bộ kiến trúc đóng gói bằng Docker
+- Query response time is ≤ 800 ms
+- No unrestricted web search (Grounded RAG only, to reduce hallucinations)
+- LLM inference is distributed across four independent NVIDIA A16 GPU cores without VRAM overflow
+- The entire architecture is packaged with Docker
 
-## Đánh giá RAG bằng RAGAS
+## RAG Evaluation with RAGAS
 
-Tự động chấm faithfulness, answer_relevancy, context_precision, context_recall
-(+ factual_correctness) và đo latency retrieval/generation trên bộ câu hỏi riêng.
+Automatically evaluates faithfulness, answer_relevancy, context_precision, context_recall,
+and factual_correctness, and measures retrieval and generation latency on a dedicated question set.
 
 ```bash
 # 1. Create backend-ai/eval/eval_set.jsonl from eval_set.example.jsonl
@@ -45,24 +45,28 @@ docker compose exec backend-ai python -m app.rag.evaluation eval/eval_set.jsonl 
 docker compose exec backend-ai python -m app.rag.evaluation eval/eval_set.jsonl --no-rerank --tag no-rerank
 ```
 
-Báo cáo JSON + CSV nằm ở `backend-ai/eval_results/`. Judge mặc định là model Ollama
-đang dùng; nên dùng model mạnh hơn bằng `RAGAS_JUDGE_MODEL` (hoặc
-`RAGAS_JUDGE_PROVIDER=openai` + `RAGAS_JUDGE_BASE_URL` cho server tương thích OpenAI).
-Model 3B làm judge thường cho nhiều dòng `failed` và điểm kém tin cậy.
+JSON and CSV reports are stored in `backend-ai/eval_results/`. The default judge is the
+currently used Ollama model. A stronger model can be selected with `RAGAS_JUDGE_MODEL`,
+or with `RAGAS_JUDGE_PROVIDER=openai` and `RAGAS_JUDGE_BASE_URL` for an
+OpenAI-compatible server. A 3B model used as the judge commonly produces failed
+entries and less reliable scores.
 
 
-## Tính năng học tập mở rộng
+## Extended Learning Features
 
-| Tính năng | Giao diện | API | Ghi chú |
+| Feature | Interface | API | Notes |
 |---|---|---|---|
-| Kiểm chứng sau sinh + độ tin cậy | Huy hiệu dưới câu trả lời trong Chat | trường `confidence`, `confidence_label`, `unsupported_claims` của `/api/chat/query[/stream]` | Heuristic groundedness (không gọi thêm LLM); tắt bằng `VERIFICATION_ENABLED=false` |
-| Chế độ ôn thi | Ôn thi | `/api/exams/*` | Đề tạo từ đề cương, **chấm điểm trên máy chủ**, báo cáo chủ đề yếu (làm mượt Beta + khoảng Wilson) |
-| Chế độ giảng viên | Giảng viên | `/api/lecturer/*` | Ngân hàng câu hỏi + rubric, ghép đề (phân tầng độ khó), xuất Word/Markdown, chấm thử theo rubric (AI chỉ gợi ý) |
-| Luyện nói | Luyện nói | `/api/speech/*` | Whisper (faster-whisper) nhận dạng, WER so với câu mẫu, tốc độ/ngắt nghỉ/độ rõ; nghe mẫu bằng TTS của trình duyệt |
+| Post-answer verification and confidence | Badge below the chat answer | `confidence`, `confidence_label`, and `unsupported_claims` fields in `/api/chat/query[/stream]` | Heuristic groundedness check (no additional LLM call); disable with `VERIFICATION_ENABLED=false` |
+| Exam review mode | Exam Review | `/api/exams/*` | Exams generated from outlines, **server-side grading**, weak-topic reports (Beta smoothing and Wilson interval) |
+| Lecturer mode | Lecturer | `/api/lecturer/*` | Question bank and rubrics, exam paper assembly with difficulty levels, Word/Markdown export, and rubric-based review suggestions (AI suggestions only) |
+| Speaking practice | Speaking Practice | `/api/speech/*` | Whisper speech recognition (faster-whisper), WER comparison with reference sentences, and speed/pause/clarity analysis; browser TTS for listening samples |
 
-Cấu hình giọng nói (tuỳ chọn): `pip install faster-whisper`, `STT_ENABLED=true`, `WHISPER_MODEL=small|medium|large-v3`,
-`WHISPER_DEVICE=auto|cpu|cuda`. Lần đầu dùng sẽ tải model; thiếu thư viện thì `/api/speech/*` trả 503 kèm hướng dẫn.
-Ghi âm cần HTTPS hoặc `localhost`. Bản ghi chỉ xử lý trong bộ nhớ, không lưu.
+Optional speech configuration: `pip install faster-whisper`, `STT_ENABLED=true`,
+`WHISPER_MODEL=small|medium|large-v3`, and `WHISPER_DEVICE=auto|cpu|cuda`.
+The model is downloaded the first time it is used. If the library is missing,
+`/api/speech/*` returns 503 with setup instructions. Recording requires HTTPS or
+`localhost`. Recordings are processed in memory and are not saved.
 
-Bảng mới (`exams`, `exam_questions`, `exam_attempts`, `question_bank_items`, `exam_papers`) được tạo tự động khi khởi động;
-nếu tắt `AUTO_MIGRATE_SCHEMA` hãy chạy `scripts/migrations/005_exam_lecturer.sql`.
+The new tables (`exams`, `exam_questions`, `exam_attempts`, `question_bank_items`,
+and `exam_papers`) are created automatically at startup. If `AUTO_MIGRATE_SCHEMA`
+is disabled, run `scripts/migrations/005_exam_lecturer.sql`.

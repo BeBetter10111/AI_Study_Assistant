@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 // Confirmation dialog. Focus defaults to "Cancel" to prevent accidental confirmation; press Esc or click the backdrop to close.
-export default function ConfirmDialog({ title, message, confirmLabel, cancelLabel = "Hủy", danger = false, onConfirm, onCancel }) {
+export default function ConfirmDialog({ title, message, confirmLabel, cancelLabel = "Cancel", danger = false, onConfirm, onCancel }) {
   const cancelRef = useRef(null);
 
   useEffect(() => {

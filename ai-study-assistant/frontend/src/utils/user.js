@@ -1,6 +1,6 @@
 // Display-name priority: full name > username > login identifier.
 export const displayName = (profile, fallback = "") =>
-  profile?.full_name?.trim() || profile?.username || fallback || "Tài khoản";
+  profile?.full_name?.trim() || profile?.username || fallback || "Account";
 
 // Use the first letters of the first and last words ("Le Ho Chi Hai" -> "LH"); use up to 2 letters for a single word.
 export const initials = (name) => {
@@ -10,5 +10,5 @@ export const initials = (name) => {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 };
 
-const ROLE_LABEL = { Student: "Học viên", Staff: "Nhân viên", Admin: "Quản trị viên" };
+const ROLE_LABEL = { Student: "Student", Staff: "Staff", Admin: "Administrator" };
 export const roleLabel = (role) => ROLE_LABEL[role] || role || "";

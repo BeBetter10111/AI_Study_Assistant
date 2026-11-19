@@ -6,10 +6,10 @@ const extractErrorMessage = (err) => {
   if (!err.response) {
     // No response means the request did not reach the backend or was blocked by CORS.
     // Show the requested URL and the page origin to make the problem clear.
-    const target = api.defaults.baseURL || "(VITE_API_BASE_URL chưa được cấu hình)";
+    const target = api.defaults.baseURL || "(VITE_API_BASE_URL is not configured)";
     return (
-      `Không thể kết nối tới server (Network Error) tại ${target}. ` +
-      `Vui lòng kiểm tra backend đang chạy và ALLOWED_ORIGINS cho phép ${window.location.origin}.`
+      `Could not connect to the server (Network Error) at ${target}. ` +
+      `Please verify that the backend is running and ALLOWED_ORIGINS permits ${window.location.origin}.`
     );
   }
   const detail = err.response.data?.detail;

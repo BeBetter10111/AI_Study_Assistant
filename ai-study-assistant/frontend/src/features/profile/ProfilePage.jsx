@@ -6,7 +6,7 @@ import { displayName, initials, roleLabel } from "../../utils/user";
 const joinedText = (iso) => {
   const date = iso ? new Date(iso) : null;
   if (!date || Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString("vi-VN", { month: "long", year: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 };
 
 export default function ProfilePage({ profile, onUpdated }) {
@@ -19,7 +19,7 @@ export default function ProfilePage({ profile, onUpdated }) {
   if (!profile) {
     return (
       <div className="page">
-        <p className="page-sub">Đang tải hồ sơ…</p>
+        <p className="page-sub">Loading profile…</p>
       </div>
     );
   }
@@ -49,7 +49,7 @@ export default function ProfilePage({ profile, onUpdated }) {
     e.preventDefault();
     if (saving) return;
     if (form.username.trim().length < 3) {
-      setError("Tên đăng nhập cần ít nhất 3 ký tự.");
+      setError("Username must be at least 3 characters.");
       return;
     }
     setSaving(true);
@@ -64,7 +64,7 @@ export default function ProfilePage({ profile, onUpdated }) {
       setEditing(false);
       setSaved(true);
     } catch (err) {
-      setError(getErrorMessage(err, "Không thể lưu thay đổi. Vui lòng thử lại."));
+      setError(getErrorMessage(err, "Could not save changes. Please try again."));
     } finally {
       setSaving(false);
     }
@@ -76,8 +76,8 @@ export default function ProfilePage({ profile, onUpdated }) {
   return (
     <div className="page">
       <header className="page-head">
-        <h1 className="page-title">Hồ sơ cá nhân</h1>
-        <p className="page-sub">Quản lý thông tin tài khoản của bạn.</p>
+        <h1 className="page-title">Profile</h1>
+        <p className="page-sub">Manage your account information.</p>
       </header>
 
       <section className="card card-pad">
@@ -95,26 +95,26 @@ export default function ProfilePage({ profile, onUpdated }) {
           </div>
           {!editing && (
             <button type="button" className="btn btn--primary" onClick={startEdit}>
-              Chỉnh sửa
+              Edit
             </button>
           )}
         </div>
       </section>
 
       <form className="card card-pad" onSubmit={handleSave} noValidate>
-        <h2 className="card-title">Thông tin cá nhân</h2>
-        <p className="card-sub">Cập nhật tên và số điện thoại của bạn.</p>
+        <h2 className="card-title">Personal information</h2>
+        <p className="card-sub">Update your name and phone number.</p>
 
         {saved && !editing && (
           <p className="note note--ok" role="status" style={{ marginTop: 16 }}>
-            Đã lưu thay đổi.
+            Changes saved.
           </p>
         )}
 
         <div className="form-grid" style={{ marginTop: 20 }}>
           <div className="field">
             <label className="label" htmlFor="pf-username">
-              Tên đăng nhập
+              Username
             </label>
             <input
               id="pf-username"
@@ -128,7 +128,7 @@ export default function ProfilePage({ profile, onUpdated }) {
           </div>
           <div className="field">
             <label className="label" htmlFor="pf-fullname">
-              Họ và tên
+              Full name
             </label>
             <input
               id="pf-fullname"
@@ -136,7 +136,7 @@ export default function ProfilePage({ profile, onUpdated }) {
               value={value("full_name")}
               onChange={setField("full_name")}
               readOnly={!editing}
-              placeholder={editing ? "Nguyễn Văn A" : "Chưa cập nhật"}
+              placeholder={editing ? "Jane Doe" : "Not provided"}
               autoComplete="name"
               maxLength={255}
             />
@@ -147,12 +147,12 @@ export default function ProfilePage({ profile, onUpdated }) {
             </label>
             <input id="pf-email" className="input" value={profile.email} readOnly />
             {editing && (
-              <span className="field-hint">Email dùng để khôi phục mật khẩu nên không thể sửa ở đây.</span>
+              <span className="field-hint">Email is used for password recovery and cannot be edited here.</span>
             )}
           </div>
           <div className="field">
             <label className="label" htmlFor="pf-phone">
-              Số điện thoại
+              Phone number
             </label>
             <input
               id="pf-phone"
@@ -161,7 +161,7 @@ export default function ProfilePage({ profile, onUpdated }) {
               value={value("phone")}
               onChange={setField("phone")}
               readOnly={!editing}
-              placeholder={editing ? "09xx xxx xxx" : "Chưa cập nhật"}
+              placeholder={editing ? "(555) 555-5555" : "Not provided"}
               autoComplete="tel"
               maxLength={30}
             />
@@ -177,17 +177,17 @@ export default function ProfilePage({ profile, onUpdated }) {
         {editing && (
           <div className="actions" style={{ marginTop: 20 }}>
             <button type="submit" className="btn btn--primary" disabled={saving}>
-              {saving ? "Đang lưu…" : "Lưu thay đổi"}
+              {saving ? "Saving…" : "Save changes"}
             </button>
             <button type="button" className="btn" onClick={cancelEdit} disabled={saving}>
-              Hủy
+              Cancel
             </button>
           </div>
         )}
 
         {joined && !editing && (
           <p className="field-hint" style={{ marginTop: 20 }}>
-            Tham gia từ {joined}
+            Joined {joined}
           </p>
         )}
       </form>

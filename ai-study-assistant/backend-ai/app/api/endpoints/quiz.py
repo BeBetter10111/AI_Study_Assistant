@@ -155,14 +155,14 @@ async def _generate_quiz(payload: GenerateQuizRequest, db: AsyncSession, current
         logger.error("Error generating quiz: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Không thể tạo quiz từ mô hình ngôn ngữ.",
+            detail="Could not generate the quiz from the language model.",
         ) from exc
 
     questions = result.get("questions") or []
     if not questions:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Mô hình ngôn ngữ không trả về câu hỏi hợp lệ.",
+            detail="The language model did not return valid questions.",
         )
 
     valid_questions = [
