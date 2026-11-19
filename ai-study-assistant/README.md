@@ -49,3 +49,20 @@ Báo cáo JSON + CSV nằm ở `backend-ai/eval_results/`. Judge mặc định l
 đang dùng; nên dùng model mạnh hơn bằng `RAGAS_JUDGE_MODEL` (hoặc
 `RAGAS_JUDGE_PROVIDER=openai` + `RAGAS_JUDGE_BASE_URL` cho server tương thích OpenAI).
 Model 3B làm judge thường cho nhiều dòng `failed` và điểm kém tin cậy.
+
+
+## Tính năng học tập mở rộng
+
+| Tính năng | Giao diện | API | Ghi chú |
+|---|---|---|---|
+| Kiểm chứng sau sinh + độ tin cậy | Huy hiệu dưới câu trả lời trong Chat | trường `confidence`, `confidence_label`, `unsupported_claims` của `/api/chat/query[/stream]` | Heuristic groundedness (không gọi thêm LLM); tắt bằng `VERIFICATION_ENABLED=false` |
+| Chế độ ôn thi | Ôn thi | `/api/exams/*` | Đề tạo từ đề cương, **chấm điểm trên máy chủ**, báo cáo chủ đề yếu (làm mượt Beta + khoảng Wilson) |
+| Chế độ giảng viên | Giảng viên | `/api/lecturer/*` | Ngân hàng câu hỏi + rubric, ghép đề (phân tầng độ khó), xuất Word/Markdown, chấm thử theo rubric (AI chỉ gợi ý) |
+| Luyện nói | Luyện nói | `/api/speech/*` | Whisper (faster-whisper) nhận dạng, WER so với câu mẫu, tốc độ/ngắt nghỉ/độ rõ; nghe mẫu bằng TTS của trình duyệt |
+
+Cấu hình giọng nói (tuỳ chọn): `pip install faster-whisper`, `STT_ENABLED=true`, `WHISPER_MODEL=small|medium|large-v3`,
+`WHISPER_DEVICE=auto|cpu|cuda`. Lần đầu dùng sẽ tải model; thiếu thư viện thì `/api/speech/*` trả 503 kèm hướng dẫn.
+Ghi âm cần HTTPS hoặc `localhost`. Bản ghi chỉ xử lý trong bộ nhớ, không lưu.
+
+Bảng mới (`exams`, `exam_questions`, `exam_attempts`, `question_bank_items`, `exam_papers`) được tạo tự động khi khởi động;
+nếu tắt `AUTO_MIGRATE_SCHEMA` hãy chạy `scripts/migrations/005_exam_lecturer.sql`.
