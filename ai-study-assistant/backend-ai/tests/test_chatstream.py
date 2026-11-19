@@ -80,6 +80,7 @@ async def test_stream_reports_real_steps_tokens_then_result(app_client, monkeypa
         ("intent", "running"), ("intent", "done"),
         ("search", "running"), ("search", "done"),
         ("generate", "running"), ("generate", "done"),
+        ("verify", "running"), ("verify", "done"),     # post-generation groundedness check
     ]
     search_done = next(e for e in events if e.get("id") == "search" and e["status"] == "done")
     assert "Page 3" in search_done["detail"]

@@ -1,5 +1,4 @@
 """Luồng quên mật khẩu: forgot -> verify code -> reset -> login lại."""
-import uuid
 from datetime import timedelta
 
 import pytest

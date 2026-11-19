@@ -21,6 +21,7 @@ from app.core.streaming import HEARTBEAT, SSE_KEEPALIVE, Done, aiter_blocking, r
 from app.models.models import User
 from app.rag import knowledge_graph
 from app.rag.query_expansion import expand_query
+from app.rag.verification import verify_answer
 from app.rag.semantic_cache import semantic_cache
 from app.rag.vector_store import vector_store
 
@@ -115,6 +116,12 @@ class QueryResponse(BaseModel):
     domain: str = "general"
     tts_text: str = ""          # corrected / target text the client may speak (language route)
     tool_used: Optional[str] = None
+    # Post-generation verification (see app/rag/verification.py): groundedness of the answer in the context.
+    confidence: Optional[float] = None            # 0..1, None when not applicable (tool answer, abstention...)
+    confidence_label: Optional[str] = None        # high | medium | low | abstain | unverified
+    supported_ratio: Optional[float] = None
+    unsupported_claims: List[str] = []
+    invalid_citations: List[int] = []
 
 
 def _is_identity_question(question: str) -> bool:
@@ -168,6 +175,12 @@ def _retrieval_extras(standalone_query: str) -> List[str]:
         return expand_query(standalone_query).terms
     except Exception:  # noqa: BLE001 - expansion must never break chat
         return []
+
+
+def _verification_fields(answer: str, hits: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Run the groundedness check (CPU-bound, call in a thread). Empty dict when disabled / not applicable."""
+    result = verify_answer(answer, hits)
+    return result.to_public() if result is not None else {}
 
 
 def _search_hits(standalone_query: str, top_k: int, document_id: Optional[str], owner_id: str):
@@ -471,6 +484,7 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
         )
 
     citations = _build_citations(hits)
+    verification = await run_in_threadpool(_verification_fields, answer, hits)
 
     return QueryResponse(
         intent=intent,
@@ -481,6 +495,7 @@ async def _query(payload: QueryRequest, current_user: User) -> QueryResponse:
         domain=route.domain,
         tts_text=route.tts_text,
         tool_used=tool_name,
+        **verification,
     )
 
 
@@ -567,7 +582,7 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
         route_box: Dict[str, Any] = {"route": RouteDecision(intent="qa")}
 
         def final(intent: str, answer: str, citations: List[Citation], standalone_query: str,
-                  cached: bool = False) -> str:
+                  cached: bool = False, verification: Optional[Dict[str, Any]] = None) -> str:
             route: RouteDecision = route_box["route"]
             response = QueryResponse(
                 intent=intent, answer=answer, citations=citations,
@@ -577,18 +592,19 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 domain=route.domain,
                 tts_text=route.tts_text,
                 tool_used=route.tools[0].name if route.tools else None,
+                **(verification or {}),
             )
             return _sse({"type": "result", "data": response.model_dump()})
 
         async def finish(intent: str, answer: str, citations: List[Citation], standalone_query: str,
-                         cached: bool = False) -> str:
+                         cached: bool = False, verification: Optional[Dict[str, Any]] = None) -> str:
             """Lưu câu trả lời vào lịch sử (nếu có hội thoại) rồi tạo frame `result`."""
             if conversation_id:
                 await conversation_store.append_message(
                     conversation_id, owner_id, "assistant", answer,
                     citations=[c.model_dump() for c in citations], intent=intent, cached=cached,
                 )
-            return final(intent, answer, citations, standalone_query, cached=cached)
+            return final(intent, answer, citations, standalone_query, cached=cached, verification=verification)
 
         user_lease = gate.try_acquire_user(owner_id)
         if user_lease is None:  # Rare race between checking and acquiring a slot; report the error through the stream.
@@ -673,7 +689,7 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 yield await finish(
                     intent, cached["answer"],
                     [Citation(**c) for c in cached.get("citations", [])],
-                    standalone_query, cached=True,
+                    standalone_query, cached=True, verification=cached.get("verification"),
                 )
                 return
 
@@ -747,13 +763,26 @@ async def query_stream(request: Request, payload: QueryRequest, current_user: Us
                 logger.warning(f"Query latency {latency_ms:.0f}ms exceeds threshold "
                                f"{settings.max_response_latency_ms}ms")
             citations = _build_citations(hits)
+
+            # 5. Groundedness check: is each claim of the answer supported by the retrieved passages?
+            verification: Dict[str, Any] = {}
+            if settings.verification_enabled:
+                verify_label = "Checking the answer against your document"
+                yield running("verify", verify_label)
+                verification = await run_in_threadpool(_verification_fields, answer, hits)
+                shown = verification.get("confidence_label")
+                detail = (f"Confidence {verification['confidence']:.0%} ({shown})"
+                          if verification.get("confidence") is not None else (shown or "Not applicable"))
+                yield done("verify", verify_label, detail)
+
             if cache_session is not None:  # only complete, grounded answers are cached
                 await cache_session.store({
                     "answer": answer,
                     "citations": [c.model_dump() for c in citations],
                     "standalone_query": standalone_query,
+                    "verification": verification,
                 })
-            yield await finish(intent, answer, citations, standalone_query)
+            yield await finish(intent, answer, citations, standalone_query, verification=verification)
         except Exception as exc:
             logger.exception("Streaming query failed")
             yield _sse({"type": "error", "detail": f"Something went wrong while answering: {exc}"})

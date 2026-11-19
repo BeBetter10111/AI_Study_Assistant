@@ -20,10 +20,7 @@ from app.rl import agent as rl_agent
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
 # Schemas
-# ---------------------------------------------------------------------------
-
 class QuizQuestion(BaseModel):
     question: str
     options: List[str] = Field(min_length=2, max_length=8)
@@ -65,10 +62,7 @@ class SubmitQuizResponse(BaseModel):
     next_difficulty: str  # Difficulty for the next quiz — displayed by the frontend.
 
 
-# ---------------------------------------------------------------------------
 # Difficulty prompt fragments
-# ---------------------------------------------------------------------------
-
 _DIFFICULTY_INSTRUCTION: dict[str, str] = {
     "easy": (
         "The questions should be straightforward and test basic recall. "
@@ -86,10 +80,7 @@ _DIFFICULTY_INSTRUCTION: dict[str, str] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Endpoints
-# ---------------------------------------------------------------------------
-
 @router.post("/generate", response_model=GenerateQuizResponse)
 @limiter.limit("20/minute")
 async def generate_quiz(
@@ -155,14 +146,14 @@ async def _generate_quiz(payload: GenerateQuizRequest, db: AsyncSession, current
         logger.error("Error generating quiz: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not generate the quiz from the language model.",
+            detail="Không thể tạo quiz từ mô hình ngôn ngữ.",
         ) from exc
 
     questions = result.get("questions") or []
     if not questions:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The language model did not return valid questions.",
+            detail="Mô hình ngôn ngữ không trả về câu hỏi hợp lệ.",
         )
 
     valid_questions = [
@@ -201,8 +192,6 @@ async def submit_quiz_result(
             detail="quiz_id hoặc document_id không hợp lệ.",
         ) from exc
 
-    # The quiz id must have been issued to THIS user by /generate, and no more results than the quiz has
-    # questions may be submitted for it (otherwise a client could fabricate results to steer its own difficulty).
     allowed = verify_quiz_id(str(current_user.id), quiz_uuid)
     if allowed is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="quiz_id không hợp lệ.")

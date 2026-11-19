@@ -26,8 +26,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Dummy hash to ensure login always takes bcrypt time, even when the user does not exist -> do not reveal
-# whether an account exists through response timing.
 _DUMMY_HASH = pwd_context.hash("timing-equalisation-only")
 
 MAX_PASSWORD_LENGTH = 72
@@ -77,8 +75,6 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     existing = result.scalar_one_or_none()
 
     if existing is not None:
-        # One generic message for username / email / phone: telling them apart would let anyone probe
-        # which usernames, emails and phone numbers already have an account (user enumeration).
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=REGISTER_CONFLICT_MESSAGE)
 
     # Security: role is ALWAYS forced to the default unprivileged role at public
@@ -98,8 +94,6 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     try:
         await db.commit()
     except IntegrityError as exc:
-        # If Sign up is clicked twice / two requests run concurrently, both can pass the duplicate check
-        # above; the second then violates UNIQUE -> previously this returned HTTP 500.
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

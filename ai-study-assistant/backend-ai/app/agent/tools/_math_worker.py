@@ -1,12 +1,3 @@
-"""Sandboxed SymPy evaluation.
-
-This file is executed as a *separate process* by ``math_tool.evaluate`` (``python -I _math_worker.py``)
-so a runaway computation (``9**9**9**9``, ``factorial(10**6)``, a huge ``Sum``) can be killed on timeout
-instead of freezing the API process (a Python thread cannot be killed and a big-int operation holds the GIL).
-
-It deliberately imports nothing from ``app`` — only the standard library and SymPy.  Protocol:
-stdin = JSON ``{"expr": str, "timeout": float}``; stdout = JSON ``{"ok": bool, "result"|"error": str}``.
-"""
 from __future__ import annotations
 
 import ast

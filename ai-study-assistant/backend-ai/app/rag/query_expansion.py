@@ -1,20 +1,3 @@
-"""Entity linking + query expansion (medicine / life sciences first, extensible to any domain).
-
-Students ask with the *brand* name ("Panadol uống bao nhiêu?") while lecture notes use the
-*active ingredient* ("paracetamol"), or with a lay Vietnamese name ("tiểu đường") while the
-textbook says "đái tháo đường" / "diabetes mellitus".  Dense embeddings only partly bridge this
-and BM25 not at all.  ``expand_query`` links the mentions in a question to canonical concepts and
-returns extra terms that are appended to the retrieval query (never to the cache key or the
-question shown to the LLM).
-
-Linkers
--------
-* ``LexiconLinker``  — offline, accent-insensitive longest-match over a JSON/CSV lexicon
-  (seed: ``app/rag/lexicons/medical.json``; add MeSH exports / hospital formularies with
-  ``MEDICAL_LEXICON_PATHS``).
-* ``UMLSLinker``     — optional, UMLS UTS REST API (``UMLS_API_KEY``), short timeout, LRU cache,
-  fail-open.  Only used for capitalised / long words that the lexicon did not recognise.
-"""
 from __future__ import annotations
 
 import csv

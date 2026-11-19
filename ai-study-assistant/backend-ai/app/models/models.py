@@ -30,12 +30,6 @@ class User(Base):
 
 
 class PasswordResetToken(Base):
-    """Mã xác nhận đặt lại mật khẩu (UUID gửi qua email).
-
-    Chỉ lưu SHA-256 của mã, không lưu mã gốc: lộ DB cũng không dùng được mã.
-    Mỗi mã dùng một lần, hết hạn sau PASSWORD_RESET_EXPIRE_MINUTES.
-    """
-
     __tablename__ = "password_reset_tokens"
 
     id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -50,12 +44,6 @@ class PasswordResetToken(Base):
 
 
 class UserRLState(Base):
-    """Trạng thái RL bền vững theo user — thay thế dict in-memory.
-
-    Mỗi user có đúng một row, được upsert sau mỗi lần submit quiz.
-    Đây là ground truth; Redis là cache nhanh phía trên.
-    """
-
     __tablename__ = "user_rl_states"
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True, nullable=False)
@@ -166,3 +154,82 @@ class KGEdge(Base):
     relation = Column(String(128), nullable=False, default="related_to")
     weight = Column(Float, nullable=False, default=1.0)
     chunk_index = Column(Integer, nullable=True)
+
+
+class Exam(Base):
+    """Exam generated from a syllabus (student exam-prep mode). The answer key stays on the server."""
+
+    __tablename__ = "exams"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(200), nullable=False, default="")
+    syllabus = Column(Text, nullable=False, default="")
+    num_questions = Column(Integer, nullable=False, default=0)
+    duration_min = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExamQuestion(Base):
+    __tablename__ = "exam_questions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exam_id = Column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), nullable=False, index=True)
+    idx = Column(Integer, nullable=False)
+    topic = Column(String(255), nullable=False, default="")
+    question = Column(Text, nullable=False)
+    options_json = Column(Text, nullable=False, default="[]")
+    correct_index = Column(Integer, nullable=False)
+    explanation = Column(Text, nullable=False, default="")
+
+
+class ExamAttempt(Base):
+    __tablename__ = "exam_attempts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exam_id = Column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    answers_json = Column(Text, nullable=False, default="[]")
+    correct = Column(Integer, nullable=False, default=0)
+    total = Column(Integer, nullable=False, default=0)
+    score = Column(Float, nullable=False, default=0.0)          # percent 0..100
+    per_topic_json = Column(Text, nullable=False, default="{}")  # {topic: {"correct": c, "total": n}}
+    duration_s = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class QuestionBankItem(Base):
+    """Lecturer question bank: MCQ / short answer / essay with answer key and grading rubric."""
+
+    __tablename__ = "question_bank_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    topic = Column(String(255), nullable=False, default="")
+    qtype = Column(String(16), nullable=False, default="mcq")          # mcq | short_answer | essay
+    difficulty = Column(String(8), nullable=False, default="medium")   # easy | medium | hard
+    question = Column(Text, nullable=False)
+    options_json = Column(Text, nullable=True)
+    correct_index = Column(Integer, nullable=True)
+    answer_key = Column(Text, nullable=False, default="")
+    rubric_json = Column(Text, nullable=True)
+    explanation = Column(Text, nullable=False, default="")
+    source_ref = Column(String(255), nullable=True)
+    status = Column(String(16), nullable=False, default="draft")       # draft | approved
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExamPaper(Base):
+    """A composed exam paper (snapshot of bank items so later edits do not change an issued paper)."""
+
+    __tablename__ = "exam_papers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(200), nullable=False, default="")
+    snapshot_json = Column(Text, nullable=False, default="{}")
+    total_points = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

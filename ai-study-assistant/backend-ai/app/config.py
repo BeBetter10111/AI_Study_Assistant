@@ -25,6 +25,31 @@ class Settings(BaseSettings):
     ollama_timeout_s: float = 300.0
 
     max_response_latency_ms: int = 800
+
+    # --- Post-generation verification (groundedness check + confidence badge), see app/rag/verification.py ---
+    verification_enabled: bool = True
+    verification_use_embeddings: bool = True      # False -> lexical evidence only (fastest)
+    verification_threshold: float = 0.5           # tau when embeddings are used (0.5*cos + 0.5*lexical)
+    verification_lexical_threshold: float = 0.4   # tau in lexical-only mode
+    verification_max_claims: int = 20
+
+    # --- Exam-prep mode and lecturer mode ---
+    max_exams_per_user: int = 100
+    max_bank_items_per_user: int = 2000
+    exam_max_questions: int = 40
+    exam_max_topics: int = 12
+    exam_weak_threshold: float = 0.6        # smoothed topic accuracy below this => "weak"
+    exam_weak_min_questions: int = 3        # need at least this many answered questions before judging a topic
+
+    # --- Speaking practice (Whisper speech-to-text) ---
+    stt_enabled: bool = True
+    stt_backend: str = "faster-whisper"     # only faster-whisper (CTranslate2) is implemented
+    whisper_model: str = "small"            # tiny | base | small | medium | large-v3
+    whisper_device: str = "auto"            # auto | cpu | cuda
+    whisper_compute_type: str = "int8"
+    stt_max_audio_mb: int = 10
+    stt_max_audio_seconds: int = 120
+
     jwt_secret: str = "change-me"
     app_env: str = "production"
     jwt_algorithm: str = "HS256"

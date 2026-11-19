@@ -63,3 +63,6 @@ slowapi==0.1.9
 # RAGAS
 ragas==0.2.15
 langchain-openai==0.3.19
+
+# Speaking practice (speech-to-text). Optional: without it /api/speech returns 503 with install instructions.
+faster-whisper==1.0.3

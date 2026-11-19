@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db
-from app.api.endpoints import auth, chat, conversations, documents, quiz
+from app.api.endpoints import auth, chat, conversations, documents, exams, lecturer, quiz, speech
 from app.api.security.rate_limiter import limiter
 from app.config import settings
 from app.core import conversation_store
@@ -182,6 +182,13 @@ app.add_middleware(
     path="/api/documents/upload",
     max_body_bytes=documents.MAX_UPLOAD_SIZE_BYTES + 1024 * 1024,  # +1 MB for multipart overhead.
 )
+# Audio uploads for speaking practice are small; reject oversized bodies before Starlette spools them to disk.
+for _speech_path in ("/api/speech/transcribe", "/api/speech/practice"):
+    app.add_middleware(
+        UploadSizeLimitMiddleware,
+        path=_speech_path,
+        max_body_bytes=settings.stt_max_audio_mb * 1024 * 1024 + 1024 * 1024,
+    )
 app.add_middleware(UnhandledErrorMiddleware)
 
 # CORS — explicit allow-list instead of wildcard "*".
@@ -198,6 +205,9 @@ app.include_router(documents.router, prefix="/api/documents", tags=["documents"]
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(conversations.router, prefix="/api/conversations", tags=["conversations"])
 app.include_router(quiz.router, prefix="/api/quiz", tags=["quiz"])
+app.include_router(exams.router, prefix="/api/exams", tags=["Exams"])
+app.include_router(lecturer.router, prefix="/api/lecturer", tags=["Lecturer"])
+app.include_router(speech.router, prefix="/api/speech", tags=["Speech"])
 
 @app.get("/health")
 async def health(response: Response, db: AsyncSession = Depends(get_db)):
